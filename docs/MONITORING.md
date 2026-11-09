@@ -645,6 +645,55 @@ DSN 指向 `127.0.0.1`，验证数据没出本机。
 > **当初给项目定版本时**，直接写了 `^7.x` 而没有先核对 Sentry 当前主流是哪个大版本，这是个疏漏。
 > 后来核对完才发现升级面远小于「跨三个大版本」这个说法给人的印象——上面那张表就是全部改动面。
 
+### 源码映射（sourcemap）：异常堆栈能不能落到源码行
+
+生产包会被打包压缩：多文件合成一两个 chunk、变量名缩短、换行去掉。这时报错只能给到
+「`index-BkcrGFRS.js:1:48213`」这种压缩后坐标，**没有 sourcemap 就等于定位不到自己写的哪一行**。
+所以 README 里「Sentry 能告诉你哪个文件哪一行」这句话，前提就是这份映射存在。
+
+**怎么接的**：用官方的 `@sentry/vite-plugin`，在 `vite build` 阶段上传 sourcemap 到 Sentry、
+并建对应 release 的 artifact。配置在 `web/vite.config.ts`。
+
+**三条安全约束（缺一条源码就会泄露）**：
+
+1. **`build.sourcemap: 'hidden'`**：照常生成 `.map` 给上传用，但 bundle 里**不写 `sourceMappingURL`**。
+   普通的 `sourcemap: true` 会让浏览器 devtools 顺着引用把完整源码下下来 —— 等于公开源码。
+2. **上传后删除**：插件配了 `filesToDeleteAfterUpload: ['dist/**/*.map']`，传完即删，产物里不留 map。
+3. **没有 token 就根本不生成 map**：`sourcemap: authToken ? 'hidden' : false`。
+   没配 token 的人本地 `pnpm build` 产出的 `dist` 里是 0 个 `.map`，源码不会随部署泄露。
+
+**token 怎么给（红线）**：`SENTRY_AUTH_TOKEN` 是带写权限的私钥，**只从环境变量读，绝不进仓库**。
+本项目支持两种来源：直接给 `SENTRY_AUTH_TOKEN`，或给 `SENTRY_AUTH_TOKEN_FILE` 指向一个仓库外的密钥文件
+（`vite.config.ts` 在本进程内读取，不打印）。例如：
+
+```bash
+SENTRY_AUTH_TOKEN_FILE="D:/path/to/sentryauthtoken.txt" pnpm build
+```
+
+没配这两个变量时，构建会**静默跳过上传**，本地照常出包。
+
+**release 必须对得上**：插件上传时用的 release 名和运行时 `monitor.ts` 里的 `RELEASE` 由
+`vite.config.ts` 统一算一次，再写回 `process.env` 供两者共用，所以两边天然一致。
+
+取值优先级：
+
+1. 命令行/CI 显式注入的 `VITE_APP_VERSION`（本条最高优先）
+2. 自动生成 `<package.json 的 version>+<git 短提交号>`，例如 `1.0.0+1502e67`
+3. 拿不到 git（如 Docker 构建没带 `.git`）时退化成纯版本号
+
+注意：`.env.*` 文件里的 `VITE_APP_VERSION` **不再生效**——那是写死的常量，发布多少次都叫
+同一个名字，Sentry 里就没法回答「这个错误是哪次发布引入的」。正式发包建议不传，让自动值
+生效即可。
+
+**验证**（不是「配置写完了」就算数）：带 token 跑一次 `pnpm build`，看两件事：
+
+```
+[sentry-vite-plugin] Info: Successfully uploaded source maps to Sentry
+dist 里 *.map 数量 = 0        # 上传后已删除
+```
+
+**为空 DSN 的构建会连 SDK 一起摇掉**：`import.meta.env.VITE_SENTRY_DSN` 是构建期常量，`monitor.ts` 里 `if (DSN)` 在 DSN 为空时会被压缩器直接判死，整块 Sentry SDK 随之被 tree-shaking 移除。实测同一个构建，index chunk 从 218KB 降到 69KB。好处是没配监控的包不带多余体积；代价是这份包**完全不上报**，所以正式环境必须在构建时注入 DSN。
+
 ### SDK、SaaS、控制台是三样东西
 
 | 名字 | 是什么 | 在哪 | 本项目里对应 |
