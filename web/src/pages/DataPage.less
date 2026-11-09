@@ -1,0 +1,46 @@
+.data-page {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+
+    &__filters {
+        border-radius: 8px;
+
+        :global(.ant-card-body) {
+            padding: 16px 20px;
+        }
+    }
+
+    &__label {
+        color: rgba(0, 0, 0, 0.65);
+    }
+
+    &__alert {
+        border-radius: 8px;
+    }
+
+    &__table {
+        border-radius: 8px;
+
+        :global(.ant-card-body) {
+            padding: 0;
+        }
+    }
+
+    &__desc {
+        margin: 0;
+        font-size: 12px;
+    }
+}
+
+@media (max-width: 768px) {
+    .data-page {
+        &__filters :global(.ant-card-body) {
+            padding: 12px;
+        }
+
+        &__filters :global(.ant-space) {
+            width: 100%;
+        }
+    }
+}

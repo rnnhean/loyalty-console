@@ -1,0 +1,5 @@
+-- 库由 docker-compose 的 MYSQL_DATABASE 创建，这里不再重复建库。
+-- 表结构见 02-schema.sql，种子数据见 03-seed.sql。
+-- 保留本文件是为了让 initdb 的加载顺序可读（01 = 库级预留位）。
+-- 注意：initdb 只在数据卷为空时执行一次；改完 schema 需
+--       docker compose -f deploy/docker-compose.prod.yml down -v 再起。

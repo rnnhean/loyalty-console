@@ -1,0 +1,4 @@
+# pnpm 10+ 把安装期脚本的许可从 package.json 挪到了这里。
+# esbuild 必须允许执行构建脚本，否则 vite 拿不到二进制。
+onlyBuiltDependencies:
+  - esbuild

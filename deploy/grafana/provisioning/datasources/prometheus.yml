@@ -1,0 +1,18 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    # ★ uid 必须显式写，且要和面板里引用的一致。
+    #   不写的话 Grafana 用 name 当 uid，也就是 "Prometheus"（大写 P）；
+    #   而面板 JSON 里写的是 {"uid": "prometheus"}（小写）。
+    #   Grafana 按 uid 精确匹配、区分大小写，对不上就报
+    #   "Datasource prometheus was not found"，面板全空但抓取本身是好的。
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      # 与 scrape_interval 对齐，避免面板出现锯齿
+      timeInterval: 15s
+      httpMethod: POST

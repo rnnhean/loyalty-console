@@ -1,0 +1,819 @@
+{
+  "uid": "mc-console-overview",
+  "title": "会员运营台 · 总览",
+  "tags": [
+    "loyalty-console",
+    "red",
+    "use"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "route",
+        "label": "路由",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": "label_values(mc_http_requests_total, route)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "RED：Rate / Errors / Duration",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "collapsed": false
+    },
+    {
+      "type": "stat",
+      "title": "请求速率",
+      "description": "每秒请求数。Rate 是 RED 的第一项，所有其他指标都要放在这个量级上才有意义。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(mc_http_requests_total{route=~\"$route\"}[5m]))",
+          "legendFormat": "req/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "错误率（5xx）",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(mc_http_requests_total{status=~\"5..\",route=~\"$route\"}[5m])) / clamp_min(sum(rate(mc_http_requests_total{route=~\"$route\"}[5m])), 0.001)",
+          "legendFormat": "5xx"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.01
+              },
+              {
+                "color": "red",
+                "value": 0.05
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "P99 延迟",
+      "description": "用 Histogram 算，能跨实例聚合。Summary 的分位数合不了，所以这里必须是 Histogram。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(mc_http_request_duration_seconds_bucket{route=~\"$route\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "在途请求",
+      "description": "USE 里的 Saturation：这个值持续升高说明处理速度跟不上到达速度。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "targets": [
+        {
+          "expr": "mc_http_in_flight_requests",
+          "legendFormat": "in-flight"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "请求速率（按路由）",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "targets": [
+        {
+          "expr": "sum by (route) (rate(mc_http_requests_total{route=~\"$route\"}[5m]))",
+          "legendFormat": "{{route}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "fillOpacity": 15,
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "延迟分位数",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(mc_http_request_duration_seconds_bucket{route=~\"$route\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(mc_http_request_duration_seconds_bucket{route=~\"$route\"}[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(mc_http_request_duration_seconds_bucket{route=~\"$route\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "fillOpacity": 8,
+            "lineWidth": 2
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "网关：限流 / 鉴权 / 聚合",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "被限流 & 鉴权失败",
+      "description": "这两条曲线同时抬头，通常意味着有人在扫接口。scope=caller 是「某个来源在刷」；scope=biz_key 是「某个业务 ID 被多方一起刷」，处理方式不同：前者封来源，后者要把热点数据加缓存或加锁。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 15
+      },
+      "targets": [
+        {
+          "expr": "sum by (route, scope) (rate(mc_gateway_rate_limited_total[5m]))",
+          "legendFormat": "限流 {{scope}} {{route}}"
+        },
+        {
+          "expr": "sum(rate(mc_gateway_auth_fail_total[5m]))",
+          "legendFormat": "鉴权失败"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "BFF 聚合：耗时与降级",
+      "description": "降级 = 页面返回了 200 但少了某一块数据，是「用户受影响但错误率看不出来」的唯一信号。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 15
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, aggregate) (rate(mc_aggregate_fanout_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{aggregate}}"
+        },
+        {
+          "expr": "sum by (aggregate, block) (rate(mc_aggregate_degraded_total[5m]))",
+          "legendFormat": "降级 {{aggregate}}/{{block}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "缓存与数据源",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "缓存命中率",
+      "description": "命中率 = hits / (hits + misses)。本地环境如果一直 No data，是因为读接口走得少、缓存还没被写过；多刷新几次列表页就会产生数据。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 23
+      },
+      "targets": [
+        {
+          "expr": "sum by (namespace) (rate(mc_cache_hits_total[10m])) / clamp_min(sum by (namespace) (rate(mc_cache_hits_total[10m])) + sum by (namespace) (rate(mc_cache_misses_total[10m])), 0.001)",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "fillOpacity": 12
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "singleflight 合并次数",
+      "description": "缓存击穿被拦下的次数。这个数字越高，说明防击穿越有价值。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 23
+      },
+      "targets": [
+        {
+          "expr": "sum by (key) (rate(mc_cache_singleflight_collapsed_total[5m]))",
+          "legendFormat": "{{key}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 12
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "主机资源（USE）",
+      "description": "依赖 node-exporter 提供的 node_cpu_seconds_total / node_memory_*。本地 docker-compose 没有起 node-exporter，所以这个面板永远是 No data —— 不是配置错误。生产环境加上 node-exporter 即可。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 23
+      },
+      "targets": [
+        {
+          "expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+          "legendFormat": "CPU %"
+        },
+        {
+          "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
+          "legendFormat": "内存 %"
+        },
+        {
+          "expr": "(1 - node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"}) * 100",
+          "legendFormat": "磁盘 %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "max": 100,
+          "custom": {
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "前端体验",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Web Vitals 良好率",
+      "description": "良好率 = 落在 Google 判定线以内的次数 / 总次数（0~1）。判定线：LCP 2.5s / FCP 1.8s / TTFB 800ms。\n\n★ 查询里 le 必须写 \"2500.0\" 而不是 \"2500\"：Prometheus 把桶边界序列化成浮点字符串，写整数形式会精确匹配失败、面板显示 No data。\n\n★ 用 increase 而非 rate：rate 按窗口外推，样本稀疏时会算出 >1 的比例（本地调试见过 1.007），所以外面套了 clamp_max(1)。\n\n刚打开新页面时可能没数据：LCP 要等页面卸载或切到后台才上报最终值。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "targets": [
+        {
+          "expr": "clamp_max(sum(increase(mc_frontend_vital_value_bucket{metric=\"LCP\",le=\"2500.0\"}[$__rate_interval])) / clamp_min(sum(increase(mc_frontend_vital_value_bucket{metric=\"LCP\",le=\"+Inf\"}[$__rate_interval])), 1), 1)",
+          "legendFormat": "LCP <2.5s"
+        },
+        {
+          "expr": "clamp_max(sum(increase(mc_frontend_vital_value_bucket{metric=\"FCP\",le=\"1800.0\"}[$__rate_interval])) / clamp_min(sum(increase(mc_frontend_vital_value_bucket{metric=\"FCP\",le=\"+Inf\"}[$__rate_interval])), 1), 1)",
+          "legendFormat": "FCP <1.8s"
+        },
+        {
+          "expr": "clamp_max(sum(increase(mc_frontend_vital_value_bucket{metric=\"TTFB\",le=\"800.0\"}[$__rate_interval])) / clamp_min(sum(increase(mc_frontend_vital_value_bucket{metric=\"TTFB\",le=\"+Inf\"}[$__rate_interval])), 1), 1)",
+          "legendFormat": "TTFB <800ms"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "fillOpacity": 8,
+            "lineWidth": 2
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.5
+              },
+              {
+                "color": "green",
+                "value": 0.75
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "前端事件（错误 / 上报）",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      },
+      "targets": [
+        {
+          "expr": "sum by (kind, name) (rate(mc_frontend_events_total[5m]))",
+          "legendFormat": "{{kind}}/{{name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 12
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "消息与一致性",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "发件箱积压与补发结果",
+      "description": "积压持续上涨 = 下游收不到或补发协程停了；出现 dropped 说明已有事件永久没发出去，需要人工对账。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 41
+      },
+      "targets": [
+        {
+          "expr": "mc_outbox_backlog",
+          "legendFormat": "待发条数"
+        },
+        {
+          "expr": "sum by (result) (rate(mc_outbox_flushed_total[5m]))",
+          "legendFormat": "补发 {{result}}/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 12,
+            "unit": "short"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "消息消费与锁健康度",
+      "description": "kafka dlq / rabbit 死信非零就是有消息永久没被处理；锁租约丢失说明持锁逻辑超过了 TTL。",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 41
+      },
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(mc_mq_kafka_consumed_total[5m]))",
+          "legendFormat": "kafka {{result}}/s"
+        },
+        {
+          "expr": "sum(rate(mc_mq_rabbit_dead_lettered_total[5m]))",
+          "legendFormat": "rabbit 死信/s"
+        },
+        {
+          "expr": "sum(rate(mc_lock_lost_total[5m]))",
+          "legendFormat": "锁丢失/s"
+        },
+        {
+          "expr": "sum by (outcome) (rate(mc_idempotency_outcome_total[5m]))",
+          "legendFormat": "幂等 {{outcome}}/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 12,
+            "unit": "reqps"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "PV（按页面，近 1 小时）",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (path) (increase(mc_frontend_events_total{kind=\"page_view\"}[1h])))",
+          "legendFormat": "{{path}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "color"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Web Vitals p75（毫秒，判定线 LCP 2500 / FCP 1800 / TTFB 800）",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 49
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.75, sum by (le, metric) (rate(mc_frontend_vital_value_bucket{metric=\"LCP\"}[15m])))",
+          "legendFormat": "LCP"
+        },
+        {
+          "expr": "histogram_quantile(0.75, sum by (le, metric) (rate(mc_frontend_vital_value_bucket{metric=\"FCP\"}[15m])))",
+          "legendFormat": "FCP"
+        },
+        {
+          "expr": "histogram_quantile(0.75, sum by (le, metric) (rate(mc_frontend_vital_value_bucket{metric=\"TTFB\"}[15m])))",
+          "legendFormat": "TTFB"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "fillOpacity": 8,
+            "lineWidth": 2
+          }
+        },
+        "overrides": []
+      },
+      "description": "p75 = 75% 的访问比这个值快。Google 用 p75 判定体验，不用平均值。曲线持续高于判定线说明有相当比例的用户体验很差。"
+    },
+    {
+      "type": "timeseries",
+      "title": "前端错误率（JS 错误 / PV）",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 57
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(mc_frontend_events_total{kind=~\"js_error|unhandled\"}[5m])) / clamp_min(sum(rate(mc_frontend_events_total{kind=\"page_view\"}[5m])), 0.001)",
+          "legendFormat": "错误 / PV"
+        },
+        {
+          "expr": "sum(rate(mc_frontend_events_total{kind=\"page_view\"}[5m]))",
+          "legendFormat": "PV/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 10
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "PV/s"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

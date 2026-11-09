@@ -1,0 +1,59 @@
+# 本地监控栈：Prometheus + Grafana。
+#
+# 与 docker-compose.yml（中间件）分开，因为它是可选的：
+# 只想跑业务时不必背这两个容器的内存。
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.observ.yml up -d
+#
+# 采集目标是**宿主机上的 gateway**（go run 跑的那个），不是容器。
+# 所以这里用 host.docker.internal —— Docker Desktop 提供的宿主机别名。
+# 如果 gateway 用 MC_ADDR 换了端口，同步改 prometheus.local.yml。
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: mc-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.local.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    volumes:
+      # 只挂本地配置：生产那份的 target 写的是容器名 gateway:8080，
+      # 本地没有那个容器，照抄会一直 DOWN。
+      - ./prometheus/prometheus.local.yml:/etc/prometheus/prometheus.local.yml:ro
+      # 告警规则：不带 :ro 之外的处理，必须挂进来，否则 prometheus.local.yml
+      # 里的 rule_files 指向空文件，Prometheus 会直接启动失败。
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - mc-prometheus-data:/prometheus
+    ports:
+      - "19090:9090"
+    extra_hosts:
+      # 显式写死，避免某些 Docker Desktop 版本不注入这个别名
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: mc-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # 本地开发图省事：跳过「修改默认密码」引导页
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - mc-grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "13000:3000"
+
+volumes:
+  mc-prometheus-data:
+  mc-grafana-data:

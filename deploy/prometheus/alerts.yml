@@ -1,0 +1,167 @@
+# 告警规则。
+#
+# 设计原则：**只在「用户已经受影响」或「马上要受影响」时响**。
+# 每个告警都要能对应一个明确动作，否则时间一长就没人看了。
+# 因此这里没有「CPU 超过 70%」这种阈值 —— CPU 高但延迟正常，说明还没到瓶颈。
+
+groups:
+  # ── 可用性（USE / RED 的 Errors）──
+  - name: availability
+    rules:
+      - alert: GatewayDown
+        expr: up{job="gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "网关实例不可达"
+          runbook: "先看容器状态：docker compose -f deploy/docker-compose.prod.yml ps；再看 gateway 日志里的 startup/shutdown 记录。"
+
+      - alert: HighErrorRate
+        # 5xx 占比。1 分钟内错误率超过 5% 且请求量有统计意义时才响，
+        # 否则凌晨只有 2 个请求、其中 1 个失败就告警，纯噪音。
+        expr: |
+          sum(rate(mc_http_requests_total{status=~"5.."}[1m]))
+          /
+          clamp_min(sum(rate(mc_http_requests_total[1m])), 0.5)
+          > 0.05
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "5xx 错误率 {{ $value | humanizePercentage }}"
+          runbook: "按 route 维度拆：sum by (route) (rate(mc_http_requests_total{status=~\"5..\"}[5m]))，再用 trace_id 去日志里定位。"
+
+      - alert: AuthFailureSpike
+        # 鉴权失败激增 = 有人在扫 token，或者某个客户端凭据过期了。
+        expr: sum(rate(mc_gateway_auth_fail_total[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "鉴权失败激增（{{ $value }}/s）"
+          runbook: "看 client_ip 分布。如果是单一 IP 集中失败，考虑在 nginx 层封禁。"
+
+  # ── 性能（RED 的 Duration / USE 的 Saturation）──
+  - name: latency
+    rules:
+      - alert: HighP99Latency
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le, route) (rate(mc_http_request_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.route }} P99 延迟 {{ $value }}s"
+          runbook: "先看是不是 BFF 聚合被某个子查询拖住：mc_aggregate_fanout_duration_seconds 与 mc_aggregate_degraded_total 一起看。"
+
+      - alert: InFlightSaturated
+        # 在途请求持续高位 = 上游处理不过来，连接池或数据库是常见瓶颈。
+        expr: mc_http_in_flight_requests > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "在途请求 {{ $value }}，可能已接近吞吐上限"
+          runbook: "对照 mc_cache_misses_total 和 MySQL 的 Threads_connected，判断是缓存击穿还是慢查询。"
+
+  # ── 数据面（缓存 / 聚合降级）──
+  - name: data-plane
+    rules:
+      - alert: CacheHitRateLow
+        expr: |
+          sum(rate(mc_cache_hits_total[10m]))
+          /
+          clamp_min(sum(rate(mc_cache_hits_total[10m])) + sum(rate(mc_cache_misses_total[10m])), 0.1)
+          < 0.5
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "缓存命中率 {{ $value | humanizePercentage }}"
+          runbook: "低于 50% 说明缓存没起作用：要么 TTL 太短，要么 key 设计有问题（每次请求 key 都不同）。"
+
+      - alert: AggregationDegraded
+        # 页面返回 200 但少了一块数据 —— 只看错误率发现不了，必须单独盯。
+        expr: sum(rate(mc_aggregate_degraded_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "聚合降级 {{ $value }}/s（block={{ $labels.block }}）"
+          runbook: "按 block 查对应领域服务的错误日志；这类问题用户能看到，但 HTTP 状态码是 200。"
+
+  # ── 前端体验 ──
+  - name: frontend
+    rules:
+      - alert: FrontendPoorLCP
+        expr: |
+          sum(rate(mc_frontend_vital_value_bucket{metric="LCP",le="2500"}[15m]))
+          /
+          clamp_min(sum(rate(mc_frontend_vital_value_count{metric="LCP"}[15m])), 0.1)
+          < 0.75
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LCP 良好率 {{ $value | humanizePercentage }}，低于 75% 的 Google 基线"
+          runbook: "结合 Sentry 的 performance 面板看是哪条路由慢；常见原因是首屏包过大，检查 manualChunks 是否生效。"
+
+      - alert: FrontendErrorSurge
+        expr: sum(rate(mc_frontend_events_total{kind=~"js_error|unhandled"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "前端 JS 错误激增"
+          runbook: "去 Sentry 的 Issues 按 Release 对比，通常是某次发版引入；必要时回滚。"
+
+  # ── 消息可靠性 ──
+  #
+  # 这一组只看「有没有丢」，不看「快不快」：
+  # 消息类故障真正的损失是数据不一致，延迟是次要的，
+  # 所以告警阈值都指向「事件可能永久没被处理」。
+  - name: messaging
+    rules:
+      - alert: OutboxBacklogGrowing
+        expr: mc_outbox_backlog > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "发件箱积压 {{ $value }} 条且持续 10 分钟"
+          runbook: "先看 mc_outbox_flushed_total{result=\"retry\"} 是否在涨——在涨说明下游收不到，查 Kafka 可达性与 broker 磁盘；不涨说明补发协程停了，看网关日志 outbox_scan_failed。"
+
+      - alert: OutboxDropped
+        expr: increase(mc_outbox_flushed_total{result="dropped"}[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "有事件重试耗尽被丢弃"
+          runbook: "查 msg_outbox WHERE state=2 的 last_error。这些事件对应的业务已经落库但下游永远不知道，需要人工补发或对账修复。"
+
+      - alert: KafkaDeadLetter
+        expr: increase(mc_mq_kafka_consumed_total{result="dlq"}[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "有 Kafka 消息重试耗尽进了死信"
+          runbook: "先确认消费侧错误是否可自愈（下游超时 vs 数据格式错误）；格式错误修代码后需要从死信重新投递。"
+
+      - alert: RabbitDeadLetter
+        expr: increase(mc_mq_rabbit_dead_lettered_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "有 RabbitMQ 任务进死信队列"
+          runbook: "延迟任务进死信通常是消费侧报错。到期回收类任务要特别关注：漏处理意味着权益该失效却没失效。"
+
+      - alert: LockLost
+        expr: increase(mc_lock_lost_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "分布式锁租约丢失"
+          runbook: "说明持锁期间业务超过了租约时间。先查被锁逻辑是否变慢（DB 慢查询、外部调用没有超时），再考虑调大 TTL；正确性由条件更新兜底，但重复执行会放大下游压力。"

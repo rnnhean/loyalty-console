@@ -1,0 +1,174 @@
+# 本地开发环境：数据库、缓存、消息队列、对象存储。
+#
+# 端口都刻意避开默认值（3306/6379/9092），防止和本机已装的实例抢端口。
+# 生产编排见 docker-compose.prod.yml —— 那边所有端口一律不 publish。
+#
+# 配置分三套：deploy/env/{local,staging,prod}.env
+# 本文件只负责 local；后端启动时按 MC_ENV 自动加载 local.env。
+
+name: loyalty-console-local
+
+# 容器日志轮转。本地也配，否则跑几天 json-file 能吃掉几个 GB。
+# 轮转只作用于 stdout/stderr，具名卷里的文件不受它管。
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mc-mysql
+    logging: *default-logging
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+08:00
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: mc_core
+      MYSQL_USER: app
+      MYSQL_PASSWORD: app123
+    ports:
+      - "13306:3306"
+    volumes:
+      - mc-mysql-data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot123"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: mc-redis
+    logging: *default-logging
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "16379:6379"
+    volumes:
+      - mc-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ── Kafka（KRaft 模式，无 ZooKeeper）──
+  #
+  # 用 KRaft 而不是 ZooKeeper 模式：少一个进程要管，
+  # 新版 Kafka 里 ZooKeeper 已经是维护模式。
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: mc-kafka
+    logging: *default-logging
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
+      # 两个 listener 的取舍：
+      #   PLAINTEXT_HOST 是给宿主机上的 Go 程序连的，advertise 必须写 localhost；
+      #   PLAINTEXT 是给同一 docker 网络内的其他容器连的，advertise 写服务名。
+      # 不分开的话，本机程序连上后会被 broker 重定向到一个解析不了的地址。
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:19092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # 本地开发：消息 1 小时后清理，不占磁盘
+      KAFKA_LOG_RETENTION_HOURS: 1
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms256m"
+    ports:
+      - "19092:29092"
+    volumes:
+      - mc-kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── RabbitMQ ──
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: mc-rabbitmq
+    logging: *default-logging
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: mc
+      RABBITMQ_DEFAULT_PASS: mc123
+      RABBITMQ_DEFAULT_VHOST: /console
+    ports:
+      - "15672:15672"   # 管理界面
+      - "15674:5672"    # AMQP
+    volumes:
+      - mc-rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── MinIO（S3 兼容对象存储）──
+  #
+  # 选 S3 协议而不是自建文件服务：将来换阿里云 OSS / 腾讯云 COS
+  # 只改 endpoint 和凭据，代码不动。
+  minio:
+    image: bitnamilegacy/minio:latest
+    container_name: mc-minio
+    logging: *default-logging
+    restart: unless-stopped
+    # 镜像默认以 uid 1001 运行，命名卷由 root 创建，非 root 用户写不进去。
+    # 本地开发用 root 跑没风险（容器内只有 MinIO 进程）；
+    # 生产环境应该改成显式 chown 好的 bind mount 再降权。
+    user: root
+    environment:
+      MINIO_ROOT_USER: mcadmin
+      MINIO_ROOT_PASSWORD: mcadmin123
+    command: server /data --console-address ":9001"
+    ports:
+      - "19000:9000"    # S3 API
+      - "19001:9001"    # 控制台
+    volumes:
+      - mc-minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || curl -sf http://127.0.0.1:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # 初始化桶。MinIO 本身不会自动建桶，单独一个一次性容器来做。
+  minio-init:
+    image: bitnamilegacy/minio-client:latest
+    container_name: mc-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 mcadmin mcadmin123 &&
+      mc mb --ignore-existing local/console-export &&
+      mc mb --ignore-existing local/console-tmp &&
+      echo 'buckets ready'
+      "
+    restart: "no"
+    logging: *default-logging
+
+volumes:
+  mc-mysql-data:
+  mc-redis-data:
+  mc-kafka-data:
+  mc-rabbitmq-data:
+  mc-minio-data:

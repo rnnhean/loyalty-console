@@ -1,0 +1,120 @@
+{
+  "tag": "before",
+  "at": "2026-11-09T09:09:33.874Z",
+  "汇总": {
+    "mysql": {
+      "bft_entitlement_group": 186,
+      "bft_entitlement_rule": 86,
+      "bft_task_threshold": 100,
+      "bft_tier_profile": 100,
+      "cat_offer_card": 639,
+      "cat_policy_card_bind": 8,
+      "cat_pricing_policy": 6,
+      "cat_sku_inventory": 6,
+      "cat_spu_archive": 11,
+      "cfg_dictionary_entry": 361,
+      "cfg_feature_toggle": 8,
+      "cfg_integration_module": 328,
+      "cfg_product_catalog": 870,
+      "chn_attribution_record": 8,
+      "chn_distribution_node": 100,
+      "chn_merchant_profile": 345,
+      "msg_consumed_event": 10,
+      "msg_outbox": 10,
+      "ops_campaign_plan": 100,
+      "ops_promotion_slot": 5,
+      "ops_voucher_batch": 5,
+      "trd_audit_trace": 11,
+      "trd_checkout_profile": 133,
+      "trd_debit_template": 5,
+      "trd_promo_rule": 5
+    },
+    "redis": {
+      "总key数": 0,
+      "按前缀": {},
+      "keyspace": ""
+    },
+    "kafka": {
+      "topics": [
+        "console.events"
+      ],
+      "最新offset": {
+        "console.events": 12
+      },
+      "消费组": "1 个分区分组的位点记录"
+    },
+    "rabbitmq": {
+      "vhost": "/console",
+      "队列数": 12,
+      "队列": {
+        "delay.7d.task.report.export": {
+          "ready": 0,
+          "unacked": 0,
+          "consumers": 0
+        },
+        "delay.3d.task.report.export": {
+          "ready": 0,
+          "unacked": 0,
+          "consumers": 0
+        },
+        "delay.1m.task.report.export": {
+          "ready": 0,
+          "unacked": 0,
+          "consumers": 0
+        },
+        "delay.30d.task.report.export": {
+          "ready": 0,
+          "unacked": 0,
+          "consumers": 0
+        },
+        "delay.3d.task.benefit.expiry": {
+          "ready": 1,
+          "unacked": 0,
+          "consumers": 0
+        },
+        "task.report.export": {
+          "ready": 0,
+          "unacked": 0,
+          "consumers": 0
+        },
+        "delay.5s.task.benefit.expiry": {
+          "ready": 0,
+          "unacked": 0,
+          "consumers": 0
+        },
+        "delay.5s.task.report.export": {
+          "ready": 0,
+          "unacked": 0,
+          "consumers": 0
+        },
+        "delay.30d.task.benefit.expiry": {
+          "ready": 0,
+          "unacked": 0,
+          "consumers": 0
+        },
+        "delay.1m.task.benefit.expiry": {
+          "ready": 0,
+          "unacked": 0,
+          "consumers": 0
+        },
+        "delay.7d.task.benefit.expiry": {
+          "ready": 0,
+          "unacked": 0,
+          "consumers": 0
+        },
+        "task.benefit.expiry": {
+          "ready": 0,
+          "unacked": 0,
+          "consumers": 1
+        }
+      }
+    },
+    "minio": {
+      "数据目录": "/data",
+      "桶与对象数": {
+        "console-export": 20,
+        "console-tmp": 0
+      }
+    }
+  }
+}
