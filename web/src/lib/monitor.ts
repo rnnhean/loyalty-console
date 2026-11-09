@@ -25,6 +25,24 @@ const ENV = (import.meta.env.VITE_SENTRY_ENV as string) || import.meta.env.MODE;
 const RELEASE = (import.meta.env.VITE_APP_VERSION as string) || 'dev';
 const BEACON_URL = '/api/telemetry/beacon';
 
+/** 性能追踪采样率。做成可配是为了能在验证时临时拉到 1.0（默认 10%） */
+const TRACES_RATE = Number(import.meta.env.VITE_TRACES_SAMPLE_RATE ?? 0.1);
+
+/**
+ * 浏览器端 Profile 的会话采样率。
+ *
+ * 为什么默认是 1.0 而不是 0.1 —— 这里有个很容易踩的乘法：
+ * `profileLifecycle: 'trace'` 下，一个会话要被剖析，必须**同时**满足
+ *   (a) 该 profile 会话被采样，概率 = 本值；
+ *   (b) 该次根 span 被追踪采样，概率 = TRACES_RATE。
+ * 实际概率是两者相乘。如果两个都填 0.1，真实剖析率只有 **1%** ——
+ * 表现就是「Profiles 页几乎永远是空的，偶尔冒一条」，而排查时很难想到是乘法。
+ *
+ * 把本值设成 1.0，等于「凡是被采样的 trace，都附一份 profile」，
+ * 总量仍由 TRACES_RATE（10%）控制，不会额外放大开销。
+ */
+const PROFILE_RATE = Number(import.meta.env.VITE_PROFILE_SAMPLE_RATE ?? 1);
+
 /** 当前页面的 trace_id，用于把前端事件和后端日志串起来 */
 let currentTraceId = '';
 
@@ -58,6 +76,87 @@ function scrubHeaders(headers?: Record<string, string>) {
     return out;
 }
 
+/**
+ * Sentry Logs（v10 起 SDK 自带的结构化日志）。
+ *
+ * 为什么**不用** `consoleLoggingIntegration`：
+ *   那个集成会把 `console.*` 全量转发到 Sentry 的服务器。后台系统的 console 里
+ *   混着接口返回体、订单号、用户标识，转发等于把这些原样送进第三方 SaaS ——
+ *   和本文件 `scrubUrl` / `scrubHeaders` 守住的那条底线直接冲突。
+ *
+ * 所以改成**显式打点 + 按构造脱敏**：只有调用 `logEvent` 的地方才会发日志，
+ * 属性只接受标量（字符串/数字/布尔），调用方没有机会塞进去一个对象或数组。
+ * 想加敏感字段，必须自己显式写上来 —— 而不是「不小心带出去了才发现」。
+ */
+type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+type Attrs = Record<string, string | number | boolean | undefined>;
+
+/**
+ * 属性清洗：只留标量。
+ *
+ * 这是「按构造脱敏」而不是「事后检查」——调用方根本没机会塞进来一个对象、
+ * 一个数组、一个 DOM 节点或一整个接口返回体，也就不会出现「不小心把业务数据
+ * 带上去了」这种事故。想发复杂结构，得先自己压成标量并想清楚为什么要发。
+ */
+function cleanAttrs(attributes?: Attrs): Record<string, string | number | boolean> {
+    const clean: Record<string, string | number | boolean> = {};
+    if (attributes) {
+        for (const [k, v] of Object.entries(attributes)) {
+            if (v === undefined || v === null) continue;
+            clean[k] = v;
+        }
+    }
+    return clean;
+}
+
+export function logEvent(level: LogLevel, message: string, attributes?: Attrs) {
+    const clean = cleanAttrs(attributes);
+    // 每条日志都带上 trace_id：用户截图里的这个 id 能直接串到后端日志
+    clean.trace_id = currentTraceId || 'none';
+
+    switch (level) {
+        case 'trace':
+            Sentry.logger.trace(message, clean);
+            break;
+        case 'debug':
+            Sentry.logger.debug(message, clean);
+            break;
+        case 'info':
+            Sentry.logger.info(message, clean);
+            break;
+        case 'warn':
+            Sentry.logger.warn(message, clean);
+            break;
+        case 'error':
+            Sentry.logger.error(message, clean);
+            break;
+        case 'fatal':
+            Sentry.logger.fatal(message, clean);
+            break;
+    }
+}
+
+/**
+ * Sentry Application Metrics（v10 的 metrics API：count / gauge / distribution）。
+ *
+ * 和 Logs 的分工，不是重复：
+ *   Logs    回答「什么时候发生了什么」——一条事件一行，看时间线；
+ *   Metrics 回答「有多少、多快」——数字，用来做面板和告警阈值。
+ * 同一个 api_error 两边都发，但看它的目的完全不同。
+ *
+ * 这里只用两种：
+ *   count        —— 可累加的整数（启动次数、接口失败次数）
+ *   distribution —— 需要分位数的数（Web Vitals 的毫秒值）
+ * gauge 用来表示「当前值」（如内存占用），本项目前端没有这种量，不用。
+ */
+export function countMetric(name: string, value = 1, attributes?: Attrs) {
+    Sentry.metrics.count(name, value, { attributes: cleanAttrs(attributes) });
+}
+
+export function distributionMetric(name: string, value: number, unit: string, attributes?: Attrs) {
+    Sentry.metrics.distribution(name, value, { unit, attributes: cleanAttrs(attributes) });
+}
+
 export function initMonitoring() {
     if (DSN) {
         Sentry.init({
@@ -65,15 +164,32 @@ export function initMonitoring() {
             environment: ENV,
             release: RELEASE,
 
-            // 错误全采，性能采 10%（见文件头注释）
+            // 错误全采，性能按 TRACES_RATE（默认 10%，见文件头注释）
             tracesSampler: (ctx) => {
                 if (ctx.name?.includes('/healthz')) return 0;
-                return 0.1;
+                return TRACES_RATE;
             },
             sampleRate: 1.0,
 
+            // ── 浏览器端性能剖析（Profiles）──
+            // 需要两样东西同时成立，缺一个 Profiles 页就是空的：
+            //   1. 这个集成 + 采样率；
+            //   2. 响应头 `Document-Policy: js-profiling`
+            //      （Chrome 的 JS Self-Profiling API 受这个策略门控，
+            //       没有它浏览器直接拒绝采集，SDK 侧不会报错，只是永远没数据）。
+            //       dev 在 vite.config.ts，生产在 nginx 配置里，两处都要有。
+            profileSessionSampleRate: PROFILE_RATE,
+            profileLifecycle: 'trace',
+
+            // 结构化日志。10.71 起 SDK 默认就开着，这里显式写出来是因为
+            // 「Sentry Logs 为什么有/没有数据」是排查时会问的第一个问题 ——
+            // 写在这比让人去翻 SDK 版本行为更省事。
+            // 注意：开了也只是开通道，实际发不发取决于有没有人调 `Sentry.logger.*`，
+            // 本项目只有 `logEvent()` 会调（见上面的说明）。
+            enableLogs: true,
+
             // 生产不给用户看 Sentry 的反馈按钮，避免暴露内部系统
-            integrations: [Sentry.browserTracingIntegration()],
+            integrations: [Sentry.browserTracingIntegration(), Sentry.browserProfilingIntegration()],
 
             beforeSend(event) {
                 // URL 只保留 origin + pathname
@@ -106,6 +222,18 @@ export function initMonitoring() {
 
     initVitals();
     initPageView();
+
+    // 启动即写一条 info 日志。
+    // 作用不只是「记录启动」：Sentry 的 Logs 页在收到第一条日志之前会一直显示
+    // 「Set up the SDK」向导，看起来像没配好。这条日志让页面立刻变成真实数据视图，
+    // 之后排查时也能一眼看到「这次会话是从哪个版本起来的」。
+    logEvent('info', 'app_started', {
+        release: RELEASE,
+        environment: ENV,
+        path: window.location.pathname,
+        lang: navigator.language,
+    });
+    countMetric('app_start', 1, { release: RELEASE, environment: ENV });
 }
 
 /**
@@ -130,6 +258,11 @@ function initPageView() {
     const fire = (path: string) => {
         if (path === lastPath) return;
         lastPath = path;
+        // 路由切换记一条 debug 级日志：排查「用户在哪个页面出的错」时，
+        // Logs 里能直接看到时间线上的页面切换，不用去猜。
+        // 用 debug 而不是 info，是为了让 Logs 默认视图不被 PV 刷屏 ——
+        // 需要时按 level 过滤即可。
+        logEvent('debug', 'page_view', { path });
         beacon([
             {
                 kind: 'page_view',
@@ -170,6 +303,16 @@ function initVitals() {
             level: 'info',
             message: `${m.name}=${m.value.toFixed(2)} (${m.rating})`,
             data: { metric: m.name, value: m.value, rating: m.rating },
+        });
+
+        // 进 Sentry Metrics：这样能在 Metrics 页按分位数看 LCP/INP 的分布，
+        // 而且和同一时间窗口的 error 放在一起对照 —— Prometheus 那边只有
+        // 分档计数，看不到真实分布的 p75/p95。
+        // CLS 是无量纲的分数，其余都是毫秒；单位错了面板上的聚合会失真。
+        distributionMetric('web_vital', m.value, m.name === 'CLS' ? 'none' : 'millisecond', {
+            metric: m.name,
+            rating: m.rating,
+            path: window.location.pathname,
         });
 
         // 兜底 beacon：Sentry 超额或未配置时，指标仍能进 Prometheus。
@@ -248,10 +391,18 @@ function send(batch: BeaconEvent[]) {
 
 /** 业务错误也上报 —— 后端 5xx 在前端是最直接的感知点 */
 export function reportApiError(path: string, status: number, traceId?: string) {
+    // 注意两套枚举不一样：captureMessage 用的是 SeverityLevel（'warning'），
+    // logger 用的是日志级别（'warn'）。写成同一个值会有一个编译不过。
+    const severity = status >= 500 ? 'error' : 'warning';
+    const logLevel = status >= 500 ? 'error' : 'warn';
     Sentry.captureMessage(`API ${status} ${path}`, {
-        level: status >= 500 ? 'error' : 'warning',
+        level: severity,
         tags: { trace_id: traceId || currentTraceId || 'none', api_path: path },
     });
+    // 同时写一条结构化日志。Issues 里是「这个错误发生了多少次」，
+    // Logs 里是「按时间排开发生了什么」—— 两者用的是同一份数据，视角不同。
+    logEvent(logLevel, 'api_error', { api_path: path, status, trace_id: traceId || undefined });
+    countMetric('api_error', 1, { api_path: path, status });
     beacon([
         {
             kind: 'api_error',

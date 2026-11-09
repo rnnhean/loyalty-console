@@ -591,13 +591,16 @@ curl http://127.0.0.1:8080/metrics | grep mc_gateway_request_total
 |---|---|
 | 后端指标（QPS / 延迟 / 错误率 / 缓存 / 限流 / 锁 / BFF 降级） | Grafana http://localhost:13000 |
 | 后端指标原始数据、告警规则 | Prometheus http://localhost:19090 |
-| 前端异常堆栈（哪个文件哪一行） | Sentry 官网控制台（不在本项目域名下） |
+| 前端异常堆栈（哪个文件哪一行） | Sentry 官网控制台 → Issues |
+| 前端运行日志（结构化，自动带 `trace_id`） | Sentry 官网控制台 → Logs |
+| 前端自定义指标（应用启动、接口失败计数、Web Vitals 分位数） | Sentry 官网控制台 → Metrics |
+| 前端性能剖析（哪段 JS 在空转 / 哪个函数慢） | Sentry 官网控制台 → Profiles |
 | 前端错误率 / PV / Web Vitals | Grafana →「前端体验」组 |
 | 某一次请求的完整经过 | 网关日志，按 `trace_id` grep（见第十一章） |
 | 数据最后有没有真的写进库 | 快照 diff（见第十章） |
 
-> **为什么没有「前端监控」这个菜单页**：要看的两样东西都不在业务库里——异常堆栈在 Sentry、
-> 指标在 Prometheus。自己再做一个页面只是把两边数据转发一遍，多一层要维护的转发层。
+> **为什么没有「前端监控」这个菜单页**：要看的数据都不在业务库里——异常、日志、指标、性能剖析在 Sentry、
+> PV 与 Web Vitals 在 Prometheus。自己再做一个页面只是把外部数据转发一遍，多一层要维护的转发层。
 > `web/src/lib/monitor.ts` 是**上报的库**，只负责往外发，没有界面。
 
 **具体怎么看、每个面板回答什么问题、怎么从一条用户抱怨查到根因**，全部写在

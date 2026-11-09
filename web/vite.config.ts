@@ -29,6 +29,13 @@ export default defineConfig(({ mode }) => {
                     changeOrigin: true,
                 },
             },
+            headers: {
+                // Chrome 的 JS Self-Profiling API 受 Document-Policy 门控。
+                // 没有这个响应头，浏览器直接拒绝采集样本，而 Sentry SDK 不会报错 ——
+                // 表现就是「Profiles 页面永远是空的」，很容易被误判成没配集成。
+                // 生产环境在 nginx 里也要发同一个头，见 deploy/nginx/conf.d/site.conf。
+                'Document-Policy': 'js-profiling',
+            },
         },
         build: {
             // 生产要上传 sourcemap 到 Sentry，所以必须生成（但不能随包发布）。

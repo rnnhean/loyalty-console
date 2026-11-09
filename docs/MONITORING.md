@@ -517,43 +517,80 @@ curl -s 'http://127.0.0.1:19090/api/v1/query?query=mc_frontend_events_total' | h
 1. **LCP 是「页面卸载或切到后台」时才上报最终值**。刚打开页面时 LCP 没有数据，FCP/TTFB 会先到。**「FCP 有、LCP 没有」是正常的。**
 2. **PV 只在 pathname 变化时记一条**。翻页、筛选（只改 query）不算新页面，否则一次翻页就虚增一个 PV。
 
-### 为什么 Sentry 的 Logs / Metrics 页面还是空的
+### Sentry 的每一页分别靠什么喂数据
 
-打开 Sentry 控制台，左侧有一排导航：Issues / Traces / **Logs** / **Metrics** / Errors / Profiles / Replays / Releases。
+打开 Sentry 控制台，左侧有一排导航：Issues / Traces / Logs / Metrics / Profiles / Replays …
 
-**Issues 和 Traces 有数据，Logs 和 Metrics 是空的。** 但原因已经不是「版本不支持」——项目现在装的是
-`@sentry/react` **10.78.0**，这两个能力都有。空的原因是**我们没有往这两个入口送数据**：
+**每一页是空的还是满的，取决于 SDK 里有没有对应的那一小段代码。** 版本对了不等于有数据 ——
+这是最容易误判的地方：升级完 SDK、日志页面仍然显示「Set up the SDK」，看的人会以为没配好。
 
-| 功能 | v10 SDK 有吗 | 本项目用了吗 | 数据实际从哪来 |
+| 页面 | 靠什么产生数据 | 本项目状态 | 配置在哪 |
 |---|---|---|---|
-| Issues（错误 + 堆栈） | ✅ | ✅ | `web/src/lib/monitor.ts` 的 `Sentry.init` + `ErrorBoundary` |
-| Traces（性能追踪） | ✅ | ✅ | `browserTracingIntegration()`，10% 采样 |
-| **Logs（结构化日志）** | ✅ 10.71 起默认开启 | ❌ 故意不接 | 日志走 stdout → `docker logs` |
-| **Metrics（自定义指标）** | ✅ OTel 形态 | ❌ 故意不接 | `/metrics` → Prometheus → Grafana |
+| **Issues** | `Sentry.init` + `ErrorBoundary` 自动捕获 | ✅ | `web/src/lib/monitor.ts` |
+| **Traces** | `browserTracingIntegration()` + `tracesSampler` | ✅ 10% 采样 | 同上 |
+| **Logs** | 显式调用 `Sentry.logger.*` | ✅ 走 `logEvent()` | 同上 |
+| **Metrics** | 显式调用 `Sentry.metrics.count/gauge/distribution` | ✅ 走 `countMetric()` / `distributionMetric()` | 同上 |
+| **Profiles** | `browserProfilingIntegration()` + `Document-Policy` 响应头 | ✅ 凡被采样的 trace 都附一份 profile（总量由 10% 追踪采样决定） | monitor.ts + vite.config.ts + nginx |
 
-**为什么不接 Logs。** v10 的 Logs 不会自己冒数据，必须主动调 `Sentry.logger.*`，或者挂
-`consoleLoggingIntegration` 把 `console.*` 全量转发过去。后台系统的 console 里混着订单号、
-用户标识、接口返回体，转发等于把这些原样送进第三方 SaaS——这跟 `scrubUrl` / `scrubHeaders`
-守住的那条「业务数据不出门」直接冲突。而且我们已经有一套结构化日志落 stdout，再接一条
-就变成两个日志系统，排查时还得先判断「这条在哪个系统里」。
+**各自发什么：**
 
-**为什么不接 Metrics。** v10 的 metrics 是 OpenTelemetry 形态，和 Prometheus 是两套互不相通的
-体系。已经有了 Prometheus + Grafana + 告警规则，再引一份只会让「p99 到底看哪个」变成新问题。
+| 时机 | Logs | Metrics | 说明 |
+|---|---|---|---|
+| 应用启动 | `app_started`（info） | `app_start`（counter） | 让 Logs/Metrics 页立刻脱离「Set up」状态，也能看出这次会话是哪个版本 |
+| 路由切换 | `page_view`（debug） | — | 用 debug 级，避免把默认视图刷屏；要 PV 数去看 Prometheus 的 `mc_frontend_events_total` |
+| 接口失败 | `api_error`（warn / error） | `api_error`（counter） | 5xx 记 error，4xx 记 warn |
+| Web Vitals | 面包屑 | `web_vital`（distribution） | Prometheus 那边只有分档计数，这里能看真实分位数的 p75/p95 |
 
-**结论：Sentry 在这个项目里只负责一件事——能定位到代码行的错误堆栈。**
+**为什么不用 `consoleLoggingIntegration`。** v10 提供了一个集成，把 `console.*` 全量转发到 Sentry。
+看着省事，但后台系统的 console 里混着订单号、用户标识、接口返回体，转发等于把这些原样送进
+第三方 SaaS —— 和 `scrubUrl` / `scrubHeaders` 守住的那条底线直接冲突。
+
+所以改成**显式打点 + 按构造脱敏**：只有 `logEvent()` / `countMetric()` 会发，属性类型被收窄成
+`string | number | boolean`，调用方在类型层面就没法塞进去一个对象或一整个接口返回体。
+想加敏感字段必须自己显式写上来 —— 而不是「不小心带出去了才发现」。
+
+**Profiles 有一个额外的坑：`Document-Policy: js-profiling`。**
+Chrome 的 JS Self-Profiling API 受响应头门控。没有这个头，浏览器直接拒绝采集样本，
+而 Sentry SDK **不报错**——表现就是 Profiles 页永远空白，看起来像集成没生效。
+开发环境在 `vite.config.ts` 的 `server.headers`，生产在 `deploy/nginx/conf.d/site.conf`，两处必须都有。
+
+**Profiles 的第二个坑，是采样率会被「乘」起来。**
+`profileLifecycle: 'trace'` 的语义是「把 profile 挂在 trace 上」，所以一个会话要被剖析，必须**同时**满足两件事：
+
+1. 这个 profile 会话被采样，概率 = `profileSessionSampleRate`；
+2. 它所属的那次根 trace 恰好被追踪采样，概率 = `tracesSampler` 的返回值。
+
+真实剖析率是两者**相乘**。如果两个都填 0.1，实际只有 **0.1 × 0.1 = 1%** ——
+表现就是 Profiles 页几乎永远是空的、几十次刷新偶尔冒一条，而且排查时很难联想到「是两个 0.1 相乘」。
+
+本项目的取法是：`profileSessionSampleRate` 默认 **1.0**（`VITE_PROFILE_SAMPLE_RATE`），
+`tracesSampler` 默认 **0.1**（`VITE_TRACES_SAMPLE_RATE`）。含义是「凡是被采样的 trace，都附一份 profile」，
+总量仍然由 10% 的追踪采样兜住，不会因为拉高 profile 率而放大开销。
+
+实测印证（假 DSN、Playwright 拦截 envelope、**不覆盖任何采样率**、跑 15 次独立加载）：
+
+```
+Profile 命中 2/15   (期望约 2 次，来自 10% 追踪采样)
+Metric  命中 13/15  （不受采样影响；漏的 2 次是脚本看到 profile 就提前关页的测量时序）
+Log     命中 13/15  （同上）
+```
+
+13% 的命中率和「10% 追踪 × 100% profile 会话」完全吻合 —— 这既是 profile 确实在上报的证据，
+也是「Profiles 页偶发空白属于正常采样行为」的量化依据。
 
 ### 从 v7 升到 v10 实际改了什么
 
-原来的版本是 `"@sentry/react": "^7.118.0"`（解析到 7.120.4）。之所以能跨三个大版本几乎没有
-代码改动，是因为 `web/src/lib/monitor.ts` 早就写成了 v8 之后的形态（`browserTracingIntegration()`、
-`ErrorBoundary` 的 `fallback` 收函数），不是 v7 的老写法。真正改的只有依赖声明：
+原来的版本是 `"@sentry/react": "^7.118.0"`（解析到 7.120.4）。升级分两部分：**换依赖**和**补接入**。
+
+**第一部分：换依赖。** 代码里原有那套（`browserTracingIntegration()`、`ErrorBoundary` 的 `fallback`
+收函数）本来就是 v8 之后的写法，不是 v7 的老 API，所以这部分零改动：
 
 ```json
 - "@sentry/react": "^7.118.0",
 + "@sentry/react": "^10.78.0",
 ```
 
-逐条核对 v8 / v9 / v10 的破坏性变更，**与本项目用到的 API 相关的**只有这些：
+逐条核对 v8 / v9 / v10 的破坏性变更，**与原有代码相关的**只有这些：
 
 | 版本 | 变更 | 对本项目的影响 |
 |---|---|---|
@@ -563,17 +600,40 @@ curl -s 'http://127.0.0.1:19090/api/v1/query?query=mc_frontend_events_total' | h
 | v10 | 底层升级到 OpenTelemetry v2 | 浏览器端行为不变 |
 | v10 | 移除 FID 指标 | 本项目用 LCP / CLS / INP / FCP / TTFB，不涉及 |
 
-**验证不是「类型检查过了」就算数。** 实际做的是起一个带假 DSN 的 dev server，用 Playwright
-拦截上报，再在页面里抛一个未捕获异常，看 SDK 会不会真的发 packet：
+**第二部分：补接入。** 光换版本，Logs / Metrics / Profiles 三页仍然是空的（第一张表已经说明了原因）。
+所以新增了：
+
+- `logEvent()` —— 显式打点，属性只收标量；
+- `countMetric()` / `distributionMetric()` —— 计数器与分位数；
+- `browserProfilingIntegration()` + `profileSessionSampleRate` + `profileLifecycle: 'trace'`；
+- `enableLogs: true`（10.71 起默认就是 true，显式写出来是为了让排查时不用去猜版本行为）；
+- `Document-Policy: js-profiling`（vite dev + nginx prod 两处）；
+- 两个采样率做成环境变量：`VITE_TRACES_SAMPLE_RATE`（默认 0.1）与
+  `VITE_PROFILE_SAMPLE_RATE`（默认 1.0）。**注意两者在 `profileLifecycle: 'trace'` 下是相乘关系**
+  （见上一节），profile 率必须保持 1.0 才能让「被采样的 trace 都有 profile」，否则两个 0.1 一乘就只剩 1%；
+
+**验证不是「类型检查过了」就算数，也不是「页面没报错」就算数。**
+实际做的是：起一个带假 DSN 的 dev server（`http://abc123@127.0.0.1:18999/1`），用 Playwright
+拦截上报，然后**把 envelope 拆开看里面有哪些 item 类型** —— 每种类型对应一个页面：
 
 ```
-SDK: {"present":true,"keys":["version","10.78.0"],"version":"10.78.0"}
-首个 URL: http://127.0.0.1:18999/api/1/envelope/?...&sentry_client=sentry.javascript.react%2F10.78.0
-✓ envelope 里含 v10-runtime-probe
+Document-Policy = "js-profiling"
+item 类型统计 = {"session":3,"transaction":1,"profile_chunk":1,"log":1,"trace_metric":1}
+  log body = page_view    | level = debug
+  log body = app_started  | level = info
+  metric = app_start   | type = counter      | value = 1
+  metric = web_vital   | type = distribution | value = 163
+  metric = web_vital   | type = distribution | value = 712
+
+Logs     : ✓ 有 log item          → Logs 页
+Metrics  : ✓ 有 metric item       → Metrics 页
+Profiles : ✓ 有 profile item      → Profiles 页
+Document-Policy: ✓ js-profiling
 ```
 
-三件事同时被证明：SDK 初始化成功、全局错误处理器挂上了、事件真的发出去了（DSN 指向
-`127.0.0.1`，数据没出本机）。
+`log` / `trace_metric` / `profile_chunk` 三种 item 分别对应 Logs / Metrics / Profiles 三页，
+所以这条输出同时证明了「三页都会真的有数据」，而不只是「SDK 能初始化」。
+DSN 指向 `127.0.0.1`，验证数据没出本机。
 
 > **当初给项目定版本时**，直接写了 `^7.x` 而没有先核对 Sentry 当前主流是哪个大版本，这是个疏漏。
 > 后来核对完才发现升级面远小于「跨三个大版本」这个说法给人的印象——上面那张表就是全部改动面。
