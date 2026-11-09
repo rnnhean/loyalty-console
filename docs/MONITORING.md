@@ -692,6 +692,14 @@ SENTRY_AUTH_TOKEN_FILE="D:/path/to/sentryauthtoken.txt" pnpm build
 dist 里 *.map 数量 = 0        # 上传后已删除
 ```
 
+**发布前必须确认的两项**（漏一个就等于没配）：
+
+1. **`VITE_SENTRY_DSN` 已注入构建**——否则线上零监控，而且整个 Sentry SDK 会被 tree-shaking 移除
+2. **`SENTRY_AUTH_TOKEN` / `SENTRY_AUTH_TOKEN_FILE` 已注入构建**——否则不生成也不上传 sourcemap
+
+容器化部署时这两个变量的传法不一样（Dockerfile 目前没接 token），
+见 [DEPLOYMENT.md · 前端镜像必须带上的两个变量](DEPLOYMENT.md#前端镜像必须带上的两个变量)。
+
 **为空 DSN 的构建会连 SDK 一起摇掉**：`import.meta.env.VITE_SENTRY_DSN` 是构建期常量，`monitor.ts` 里 `if (DSN)` 在 DSN 为空时会被压缩器直接判死，整块 Sentry SDK 随之被 tree-shaking 移除。实测同一个构建，index chunk 从 218KB 降到 69KB。好处是没配监控的包不带多余体积；代价是这份包**完全不上报**，所以正式环境必须在构建时注入 DSN。
 
 ### SDK、SaaS、控制台是三样东西

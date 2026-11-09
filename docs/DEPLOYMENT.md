@@ -223,6 +223,54 @@ docker compose -f docker-compose.prod.yml ps
 
 **只重建 gateway 和 web**，不碰 mysql/redis —— 后者重建会带断连。
 
+### 前端镜像必须带上的两个变量
+
+`web` 镜像是在**构建期**把配置打进静态资源的，所以改完必须重建镜像，`docker compose restart` 不生效。
+
+| 变量 | 不传的后果 | 现在怎么传 |
+|---|---|---|
+| `VITE_SENTRY_DSN` | 线上**零监控**。`monitor.ts` 里 `if (DSN)` 在 DSN 为空时被压缩器判死，整个 Sentry SDK 被 tree-shaking 移除（实测 index chunk 218KB → 69KB）——包更小了，但什么错误都不会报 | 宿主环境变量 `VITE_SENTRY_DSN=...`，compose 已把它转到构建参数 `SENTRY_DSN` |
+| `SENTRY_AUTH_TOKEN` | **不生成也不上传 sourcemap**，线上堆栈只有 `index-xxx.js:1:48213` 这种压缩坐标，看不出是哪一行 | 目前 Docker 构建**还没接**，见下 |
+
+**APP_VERSION 在容器里要显式传**：容器内没有 `.git`（node:alpine 也没装 git），
+`vite.config.ts` 自动生成 `<version>+<sha>` 的这条路走不通，会退化成纯版本号。
+所以发布时务必 `export APP_VERSION=1.2.0`（compose 默认值是 `1.0.0`，不改的话每次发布的
+Sentry release 都叫同一个名字，分不清是哪次上线引入的问题）。
+
+**sourcemap 的接法（Dockerfile 现状：未接 token）**
+
+现在 `web/Dockerfile` 只接了 `APP_VERSION` / `SENTRY_DSN` / `SENTRY_ENV`，
+`SENTRY_AUTH_TOKEN` 没有任何入口，所以**用 compose 构建出来的镜像，堆栈一定不会还原**。
+要还原，二选一：
+
+**A. 宿主机/CI 先构建，再打进镜像**（最简单，推荐）
+
+```bash
+cd web
+SENTRY_AUTH_TOKEN_FILE=/path/outside/repo/sentryauthtoken.txt \
+VITE_SENTRY_DSN=... \
+APP_VERSION=1.2.0 \
+  pnpm build          # 构建时上传 map 并删除，dist 里不留 .map
+```
+
+**B. 用 BuildKit secret 在镜像内传**（需要改 Dockerfile + compose）
+
+```dockerfile
+RUN --mount=type=secret,id=sentry_auth_token \
+    SENTRY_AUTH_TOKEN_FILE=/run/secrets/sentry_auth_token pnpm build
+```
+
+```yaml
+build:
+  secrets: [sentry_auth_token]
+secrets:
+  sentry_auth_token:
+    file: /path/outside/repo/sentryauthtoken.txt
+```
+
+**不要用 `ARG SENTRY_AUTH_TOKEN`**：build arg 会留在镜像层和构建缓存里，等于把带写权限的
+私钥写进镜像。secret 只在构建容器内挂载，不进层、不进 `docker history`。
+
 ### 回滚
 
 镜像按 tag 回退，不用改代码：

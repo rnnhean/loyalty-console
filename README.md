@@ -1129,6 +1129,9 @@ Vite 里 `.env.development` 的优先级**高于** `.env.local`。所以哪怕 `
 | `MC_TOKEN_TTL_MIN` | `720` | token 有效期（分钟） |
 | `MC_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 
+完整清单——前端 `VITE_*`（含采样率）、构建期 `SENTRY_*`、Docker 构建参数、后端全部 36 个
+`MC_*`（带默认值）、编排层变量——在 [docs/CONFIGURATION.md · 环境变量总表](docs/CONFIGURATION.md#五环境变量总表)。
+
 ### 数据源
 
 | 变量 | 本地取值 |

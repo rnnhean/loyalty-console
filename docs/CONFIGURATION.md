@@ -106,8 +106,8 @@ MC_LOG_LEVEL=debug go run ./cmd/gateway
 | `deploy/env/staging.env` | `MC_BLOB_PUBLIC_ENDPOINT` | 浏览器能访问到的对象存储地址 |
 | `deploy/env/staging.env` | `MC_CORS_ORIGINS` | 前后端分域时的前端域名 |
 | `deploy/env/prod.env` | 同上两项 | |
-| `web/.env.staging` | `VITE_SENTRY_DSN` | 建议单独建一个 Sentry 项目，别复用生产的 |
-| `web/.env.production` | `VITE_SENTRY_DSN` | |
+| `web/.env.staging` | `VITE_SENTRY_DSN` | 建议单独建一个 Sentry 项目，别复用生产的；**不填则线上零监控** |
+| `web/.env.production` | `VITE_SENTRY_DSN` | 生产 Sentry DSN；也可留空，改在构建时注入 |
 | `deploy/docker-compose.staging.yml` | `nginx.ports` | 放开 `443`，补 `certs` 挂载 |
 
 ### 必须由部署环境注入、不能进仓库的值
@@ -119,6 +119,15 @@ MC_TOKEN_SECRET        MC_ADMIN_PASS       GRAFANA_PASSWORD
 ```
 
 生成方式：`openssl rand -base64 48`。
+
+另有一个**只用于构建期**的凭据，同样不能进仓库：
+
+```
+SENTRY_AUTH_TOKEN   # sourcemap 上传用，带写权限；不传则构建不生成也不上传 map
+```
+
+它只在 `pnpm build` 那几秒被读取（本项目优先用 `SENTRY_AUTH_TOKEN_FILE` 指向仓库外的文件），
+运行时完全不需要。容器化构建的传法见 [DEPLOYMENT.md](DEPLOYMENT.md#前端镜像必须带上的两个变量)。
 
 生产编排里这些变量都写了 `:?` 后缀，**没设就启动失败**，不会静默用默认值。
 
@@ -172,7 +181,129 @@ docker logs loyalty-console-gateway-1 2>&1 | grep "<trace_id>"
 
 ---
 
-## 五、常见错误
+## 五、环境变量总表
+
+四类变量，生效位置完全不同。**「谁覆盖谁」见第一节**，这里只列全量和默认值。
+
+判断某个变量属于哪一类，看一个问题：**它是在哪里被读的？**
+
+| 类别 | 读取时机 | 改完要做什么 |
+|---|---|---|
+| 前端 `VITE_*` | 构建/启动时，值会被打进 bundle | 重建；dev server 重启 |
+| 前端构建期 `SENTRY_*` | 只在 `pnpm build` 那几秒 | 重新构建 |
+| 后端 `MC_*` | 进程启动时 | 重启进程/容器 |
+| 编排层 | `docker compose` 解析 yml 时 | 重新 `up -d`（改 build args 要 `--build`） |
+
+### 5.1 前端：会被打进 bundle（浏览器里能翻到）
+
+写在 `web/.env.{development,staging,production}` 或 `web/.env.local`。
+
+| 变量 | 默认 | 作用 | 注意 |
+|---|---|---|---|
+| `VITE_SENTRY_DSN` | 空 | Sentry 上报地址 | **空 = 完全不上报**，且整个 SDK 被 tree-shaking 移除 |
+| `VITE_SENTRY_ENV` | 未设时取 `MODE` | Sentry 的 environment 标签 | 建议显式写 `development` / `staging` / `production` |
+| `VITE_TRACES_SAMPLE_RATE` | `1` | 性能追踪采样率 | 1 = 全采；上高流量后下调 |
+| `VITE_PROFILE_SAMPLE_RATE` | `1` | Profile 采样率 | 与 trace 采样**相乘**：0.1 × 0.1 = 1% |
+| `VITE_API_ORIGIN` | `http://127.0.0.1:8080` | dev server 的 `/api` 代理目标 | 只在 `pnpm dev` 生效；生产同源部署不需要 |
+| `VITE_APP_VERSION` | 自动 | Sentry 的 release 名 | **`.env` 里写的不再生效**，由 `vite.config.ts` 计算，见 [MONITORING.md](MONITORING.md) |
+
+### 5.2 前端构建期：不进 bundle
+
+只存在构建进程的环境里，`vite.config.ts` 读取。**不传就静默跳过**，构建照常成功。
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `SENTRY_AUTH_TOKEN` | 空 | 上传 sourcemap 用的 token（带写权限） |
+| `SENTRY_AUTH_TOKEN_FILE` | 空 | 指向仓库外 token 文件的路径（与上一条二选一，推荐这个） |
+| `SENTRY_ORG` | `ebo-y9` | 上传目标组织 |
+| `SENTRY_PROJECT` | `javascript-react` | 上传目标项目 |
+
+没 token 时 `vite.config.ts` 连 `.map` 都不生成——避免源码随产物泄露。
+
+### 5.3 Docker 构建参数（`web/Dockerfile`）
+
+| 构建参数 | 转成的运行时变量 | 默认 |
+|---|---|---|
+| `APP_VERSION` | `VITE_APP_VERSION` | `dev` |
+| `SENTRY_DSN` | `VITE_SENTRY_DSN` | 空 |
+| `SENTRY_ENV` | `VITE_SENTRY_ENV` | `production` |
+
+容器内没有 `.git`，自动生成的 `<version>+<sha>` 走不通，所以**发布时必须显式传 `APP_VERSION`**。
+
+### 5.4 后端网关（Go，`MC_` 前缀）
+
+代码：`server/cmd/gateway/main.go`。默认值取不到时用下表的值。
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `MC_ENV` | `local` | 决定读 `deploy/env/<env>.env` |
+| `MC_ENV_FILE` | 空 | 直接指定 env 文件路径，覆盖 `MC_ENV` 的推导 |
+| `MC_ADDR` | `:8080` | 网关监听地址 |
+| `MC_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+| `MC_MYSQL_DSN` | `root:root123@tcp(127.0.0.1:13306)/mc_core?...` | MySQL 连接串 |
+| `MC_MYSQL_MAX_OPEN` | `32` | 最大连接数 |
+| `MC_MYSQL_MAX_IDLE` | `8` | 最大空闲连接 |
+| `MC_MYSQL_CONN_LIFE_MIN` | `30` | 连接最长存活（分钟） |
+| `MC_REDIS_ADDR` | `127.0.0.1:16379` | Redis 地址 |
+| `MC_REDIS_PASSWORD` | 空 | Redis 密码 |
+| `MC_REDIS_DB` | `0` | Redis 库号 |
+| `MC_BLOB_ENDPOINT` | `127.0.0.1:19000` | 对象存储 S3 接口（服务端用） |
+| `MC_BLOB_PUBLIC_ENDPOINT` | `127.0.0.1:19000` | 给浏览器的地址，域名确定后要改 |
+| `MC_BLOB_USE_SSL` | `0` | `1` 走 https |
+| `MC_BLOB_ACCESS_KEY` | `mcadmin` | |
+| `MC_BLOB_SECRET_KEY` | `mcadmin123` | |
+| `MC_BLOB_EXPORT_BUCKET` | `console-export` | 导出文件桶 |
+| `MC_BLOB_TMP_BUCKET` | `console-tmp` | 临时文件桶 |
+| `MC_KAFKA_BROKERS` | `127.0.0.1:19092` | 逗号分隔 |
+| `MC_KAFKA_TOPIC` | `console.events` | 审计事件 topic |
+| `MC_KAFKA_GROUP` | `console-audit` | 消费组 |
+| `MC_RABBIT_URL` | `amqp://mc:mc123@127.0.0.1:15674/%2Fconsole` | |
+| `MC_TOKEN_SECRET` | 空 | **必须设**；未设且 `MC_ALLOW_DEV_SECRET≠1` 时启动失败 |
+| `MC_ALLOW_DEV_SECRET` | `0` | `1` 允许用临时随机密钥（仅本地） |
+| `MC_TOKEN_TTL_MIN` | `720` | 登录 token 有效期（分钟） |
+| `MC_ADMIN_USER` | `admin` | 初始管理员 |
+| `MC_ADMIN_PASS` | 空 | 初始管理员密码 |
+| `MC_RATE_RPS` | `30` | 全局限流（每秒） |
+| `MC_RATE_BURST` | `60` | 全局突发额度 |
+| `MC_LOGIN_RPS` | `2` | 登录接口限流（突发固定 5） |
+| `MC_TELEMETRY_RPS` | `5` | 前端监控上报限流（突发固定 20） |
+| `MC_BIZ_RPS` | `10` | 业务写接口限流 |
+| `MC_BIZ_BURST` | `20` | 业务突发额度 |
+| `MC_REQUEST_TIMEOUT_SEC` | `6` | 单请求超时 |
+| `MC_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | 逗号分隔 |
+
+`MC_MYSQL_CONN_LIFE_MIN` 和 `MC_REQUEST_TIMEOUT_SEC` 三份 env 文件里都没写，走代码默认值。
+
+### 5.5 编排层（`docker compose` 插值）
+
+这些由 compose 从 `--env-file`（prod/staging）或宿主环境读取，再传进容器。
+
+| 变量 | 默认 | 用途 |
+|---|---|---|
+| `MYSQL_ROOT_PASSWORD` | 无（生产 `:?` 必填） | MySQL root |
+| `MYSQL_PASSWORD` | 无（生产 `:?` 必填） | 业务库账号密码 |
+| `REDIS_PASSWORD` | 无（生产 `:?` 必填） | Redis |
+| `RABBIT_PASSWORD` | 无（生产 `:?` 必填） | RabbitMQ |
+| `MINIO_ROOT_USER` | 无（生产 `:?` 必填） | MinIO |
+| `MINIO_ROOT_PASSWORD` | 无（生产 `:?` 必填） | MinIO |
+| `MINIO_BUCKET` | `console-export` | MinIO 桶名 |
+| `MINIO_API_PORT` | `19000` | 宿主端口 |
+| `MINIO_PUBLIC_HOST` | 无 | 浏览器访问对象存储的域名 |
+| `GRAFANA_PASSWORD` | 无（生产 `:?` 必填） | Grafana |
+| `GRAFANA_ROOT_URL` | `http://localhost:13000` | Grafana 外部地址 |
+| `MC_ADMIN_USER` | `admin` | 见 5.4 |
+| `MC_ADMIN_PASS` | 空 | 见 5.4 |
+| `MC_TOKEN_SECRET` | 无（生产 `:?` 必填） | 见 5.4 |
+| `MC_CORS_ORIGINS` | 空 | 见 5.4 |
+| `MC_LOG_LEVEL` | 按环境 | 见 5.4 |
+| `APP_VERSION` | `1.0.0` / `staging` | 前端 release，见 5.3 |
+| `VITE_SENTRY_DSN` | 空 | 前端监控，见 5.3 |
+
+密码类用 `openssl rand -base64 48` 生成；生产编排里写了 `:?` 的，**没设就启动失败**。
+
+---
+
+## 六、常见错误
 
 **「配置改了没生效」**
 先看启动日志的 `config_loaded` 那一行，确认读的是哪个文件。最常见的原因是存在一个优先级更高的真实环境变量——文件不会覆盖它。
