@@ -13,8 +13,10 @@
  *
  * 采样策略是这里最需要想清楚的地方：
  *   - error 全采（1.0）：错误本身就是异常事件，漏一条可能就漏掉一个真实 bug；
- *   - performance 采 0.1：性能数据的价值在分位数，10% 采样足够算出可信的 p75，
- *     而全采会让配额在半天内耗尽。这是「错误」和「性能」在成本上的本质差别。
+ *   - performance 默认也是 1.0：本项目是低流量的内部运营后台，导航量很小，
+ *     10% 采样会让 Traces / Profiles 时有时无，演示时看起来就像坏了。这个量级下
+ *     全采的配额开销可以忽略；真上高流量时用 VITE_TRACES_SAMPLE_RATE 下调即可。
+ * 这是「错误」和「性能」在成本上的本质差别：前者必须全采，后者按流量调。
  */
 
 import * as Sentry from '@sentry/react';
@@ -25,8 +27,15 @@ const ENV = (import.meta.env.VITE_SENTRY_ENV as string) || import.meta.env.MODE;
 const RELEASE = (import.meta.env.VITE_APP_VERSION as string) || 'dev';
 const BEACON_URL = '/api/telemetry/beacon';
 
-/** 性能追踪采样率。做成可配是为了能在验证时临时拉到 1.0（默认 10%） */
-const TRACES_RATE = Number(import.meta.env.VITE_TRACES_SAMPLE_RATE ?? 0.1);
+/**
+ * 性能追踪采样率（同时决定 Traces 和 Profiles 有没有数据）。
+ *
+ * 默认 **1.0（全采）** 而不是 0.1：本项目是低流量的内部运营后台，页面导航量很小，
+ * 10% 采样会让 Traces / Profiles 时有时无 —— 演示时看起来就像坏了。
+ * 这个量级下全采的配额开销可以忽略，换来的是三页稳定有数据。
+ * 真上到高流量时，用 `VITE_TRACES_SAMPLE_RATE=0.1` 之类的值把成本压下去即可。
+ */
+const TRACES_RATE = Number(import.meta.env.VITE_TRACES_SAMPLE_RATE ?? 1);
 
 /**
  * 浏览器端 Profile 的会话采样率。
@@ -39,7 +48,7 @@ const TRACES_RATE = Number(import.meta.env.VITE_TRACES_SAMPLE_RATE ?? 0.1);
  * 表现就是「Profiles 页几乎永远是空的，偶尔冒一条」，而排查时很难想到是乘法。
  *
  * 把本值设成 1.0，等于「凡是被采样的 trace，都附一份 profile」，
- * 总量仍由 TRACES_RATE（10%）控制，不会额外放大开销。
+ * 总量由 TRACES_RATE 控制（默认也是 1.0，低流量内部后台全采；高流量时再一起降）。
  */
 const PROFILE_RATE = Number(import.meta.env.VITE_PROFILE_SAMPLE_RATE ?? 1);
 
@@ -164,7 +173,7 @@ export function initMonitoring() {
             environment: ENV,
             release: RELEASE,
 
-            // 错误全采，性能按 TRACES_RATE（默认 10%，见文件头注释）
+            // 错误全采，性能按 TRACES_RATE（默认全采 1.0，见文件头注释）
             tracesSampler: (ctx) => {
                 if (ctx.name?.includes('/healthz')) return 0;
                 return TRACES_RATE;

@@ -30,16 +30,20 @@
 Sentry.init({
   dsn: import.meta.env.VITE_SENTRY_DSN,
   sampleRate: 1.0,          // 错误全采
-  tracesSampler: () => 0.1, // 性能 10%
+  tracesSampler: () => Number(import.meta.env.VITE_TRACES_SAMPLE_RATE ?? 1), // 性能默认全采
 });
 ```
 
 **为什么分开？** 错误事件量小（正常时一天几十条），全采不花钱且必须全采 ——
-漏掉的那条可能正好是唯一一次真实崩溃。性能事件量大（每次导航都是一条 trace），
-全采的成本是错误事件的几十倍，而 10% 已经足够看出趋势。
+漏掉的那条可能正好是唯一一次真实崩溃。
+
+性能事件量大（每次导航都是一条 trace），所以采样率做成环境变量。**本项目的默认值是 1.0（全采），
+不是 0.1**：这是低流量的内部运营后台，导航量很小，10% 采样会让 Traces / Profiles 时有时无，
+演示时看起来就像坏了。这个量级下全采的配额开销可以忽略，换来的是三页稳定有数据；
+真上到高流量时用 `VITE_TRACES_SAMPLE_RATE=0.1` 把成本压下去即可。
 
 这是"抽样"的正确用法：**抽样是为了控成本，不是为了省事**。
-凡是"少了它就没法定位问题"的信号，一律不许采样。
+凡是"少了它就没法定位问题"的信号，一律不许采样；能不能采、采多少，由流量规模决定。
 
 ### 三条必须做的处理
 
@@ -380,7 +384,7 @@ nginx 的 JSON 日志**刻意不记查询串**（`log_format` 里没有 `$reques
 | 项 | 策略 | 理由 |
 |---|---|---|
 | Sentry 错误 | 全采 | 漏一条可能就漏了唯一一次崩溃 |
-| Sentry 性能 | 10% | 量大，10% 足够看趋势 |
+| Sentry 性能 | 默认全采（env 可调） | 低流量内部后台，全采让 Traces/Profiles 稳定可见；上量后用 `VITE_TRACES_SAMPLE_RATE` 下调 |
 | Prometheus | 15 天本地 | 覆盖"最近一次抖动"；更长用远端存储 |
 | 容器日志 | 20MB × 5 轮转 | 不轮转迟早吃满磁盘 |
 | 埋点事件 | 服务端白名单 + 限流 | 公网可写接口，不限流等于开了个免费压测入口 |
@@ -430,7 +434,7 @@ throw new Error('sentry 验证');
 
 几秒后 Sentry 的 Issues 里应出现这条。**这一步必须在浏览器里做**，命令行发请求验证不到 DSN 是否生效。
 
-采样率是 `tracesSampler: 0.1`（10% 性能追踪）、`sampleRate: 1.0`（错误全采）。上报前会剔除 `authorization`、`cookie` 等敏感头，URL 里的 token 也会抹掉。
+采样率是 `tracesSampler` 默认 **1.0（全采）**、`sampleRate: 1.0`（错误全采）；高流量时可用 `VITE_TRACES_SAMPLE_RATE` 下调。上报前会剔除 `authorization`、`cookie` 等敏感头，URL 里的 token 也会抹掉。
 
 ### beacon 怎么用
 
@@ -527,10 +531,10 @@ curl -s 'http://127.0.0.1:19090/api/v1/query?query=mc_frontend_events_total' | h
 | 页面 | 靠什么产生数据 | 本项目状态 | 配置在哪 |
 |---|---|---|---|
 | **Issues** | `Sentry.init` + `ErrorBoundary` 自动捕获 | ✅ | `web/src/lib/monitor.ts` |
-| **Traces** | `browserTracingIntegration()` + `tracesSampler` | ✅ 10% 采样 | 同上 |
+| **Traces** | `browserTracingIntegration()` + `tracesSampler` | ✅ 默认全采（可用 env 下调） | 同上 |
 | **Logs** | 显式调用 `Sentry.logger.*` | ✅ 走 `logEvent()` | 同上 |
 | **Metrics** | 显式调用 `Sentry.metrics.count/gauge/distribution` | ✅ 走 `countMetric()` / `distributionMetric()` | 同上 |
-| **Profiles** | `browserProfilingIntegration()` + `Document-Policy` 响应头 | ✅ 凡被采样的 trace 都附一份 profile（总量由 10% 追踪采样决定） | monitor.ts + vite.config.ts + nginx |
+| **Profiles** | `browserProfilingIntegration()` + `Document-Policy` 响应头 | ✅ 凡被采样的 trace 都附一份 profile（默认全采，即每次加载都有） | monitor.ts + vite.config.ts + nginx |
 
 **各自发什么：**
 
@@ -560,23 +564,25 @@ Chrome 的 JS Self-Profiling API 受响应头门控。没有这个头，浏览�
 1. 这个 profile 会话被采样，概率 = `profileSessionSampleRate`；
 2. 它所属的那次根 trace 恰好被追踪采样，概率 = `tracesSampler` 的返回值。
 
-真实剖析率是两者**相乘**。如果两个都填 0.1，实际只有 **0.1 × 0.1 = 1%** ——
-表现就是 Profiles 页几乎永远是空的、几十次刷新偶尔冒一条，而且排查时很难联想到「是两个 0.1 相乘」。
+真实剖析率是两者**相乘**。曾经踩过的坑：两个都填 0.1，实际只有 **0.1 × 0.1 = 1%** ——
+表现就是 Profiles 页几乎永远是空的、几十次刷新偶尔冒一条，而且排查时很难联想到是乘法。
 
-本项目的取法是：`profileSessionSampleRate` 默认 **1.0**（`VITE_PROFILE_SAMPLE_RATE`），
-`tracesSampler` 默认 **0.1**（`VITE_TRACES_SAMPLE_RATE`）。含义是「凡是被采样的 trace，都附一份 profile」，
-总量仍然由 10% 的追踪采样兜住，不会因为拉高 profile 率而放大开销。
+本项目的取法：`profileSessionSampleRate` 默认 **1.0**（`VITE_PROFILE_SAMPLE_RATE`），
+`tracesSampler` 默认 **1.0**（`VITE_TRACES_SAMPLE_RATE`）。含义是「每次被追踪的加载都附一份 profile」，
+低流量的内部后台下就等于「每次加载都有」。**如果为了省配额把 `VITE_TRACES_SAMPLE_RATE` 调低，
+要记得 profile 率会跟着一起降**（例：降成 0.1，实际剖析率就是 0.1 × 1.0 = 10%，而不是 10% 里的 100%）。
 
-实测印证（假 DSN、Playwright 拦截 envelope、**不覆盖任何采样率**、跑 15 次独立加载）：
+**对真实 Sentry 项目的验证**（用仓库里的真实 DSN、Playwright 观察发往 `*.sentry.io` 的请求，
+只统计 envelope 的 item 类型与 HTTP 状态，不读取上报内容）：
 
 ```
-Profile 命中 2/15   (期望约 2 次，来自 10% 追踪采样)
-Metric  命中 13/15  （不受采样影响；漏的 2 次是脚本看到 profile 就提前关页的测量时序）
-Log     命中 13/15  （同上）
+一次页面加载 → envelope item = session / transaction / profile_chunk / log / trace_metric
+所有上报请求 HTTP 200
 ```
 
-13% 的命中率和「10% 追踪 × 100% profile 会话」完全吻合 —— 这既是 profile 确实在上报的证据，
-也是「Profiles 页偶发空白属于正常采样行为」的量化依据。
+`log` / `trace_metric` 到 Sentry 后，Logs / Metrics 页立刻脱离「Set up」状态；
+`transaction` / `profile_chunk` 喂 Traces / Profiles。这证明真实项目「确实收下了这三类数据」，
+而不只是「本地 SDK 能拼出 envelope」。
 
 ### 从 v7 升到 v10 实际改了什么
 
@@ -608,9 +614,10 @@ Log     命中 13/15  （同上）
 - `browserProfilingIntegration()` + `profileSessionSampleRate` + `profileLifecycle: 'trace'`；
 - `enableLogs: true`（10.71 起默认就是 true，显式写出来是为了让排查时不用去猜版本行为）；
 - `Document-Policy: js-profiling`（vite dev + nginx prod 两处）；
-- 两个采样率做成环境变量：`VITE_TRACES_SAMPLE_RATE`（默认 0.1）与
-  `VITE_PROFILE_SAMPLE_RATE`（默认 1.0）。**注意两者在 `profileLifecycle: 'trace'` 下是相乘关系**
-  （见上一节），profile 率必须保持 1.0 才能让「被采样的 trace 都有 profile」，否则两个 0.1 一乘就只剩 1%；
+- 两个采样率做成环境变量：`VITE_TRACES_SAMPLE_RATE`（默认 **1.0**，低流量内部后台全采；
+  高流量时下调）与 `VITE_PROFILE_SAMPLE_RATE`（默认 1.0）。**注意两者在 `profileLifecycle: 'trace'`
+  下是相乘关系**（见上一节），profile 率保持 1.0 才能让「被采样的 trace 都有 profile」，
+  否则两个都调成 0.1 一乘就只剩 1%；
 
 **验证不是「类型检查过了」就算数，也不是「页面没报错」就算数。**
 实际做的是：起一个带假 DSN 的 dev server（`http://abc123@127.0.0.1:18999/1`），用 Playwright
