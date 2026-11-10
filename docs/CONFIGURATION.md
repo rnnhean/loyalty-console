@@ -106,8 +106,8 @@ MC_LOG_LEVEL=debug go run ./cmd/gateway
 | `deploy/env/staging.env` | `MC_BLOB_PUBLIC_ENDPOINT` | 浏览器能访问到的对象存储地址 |
 | `deploy/env/staging.env` | `MC_CORS_ORIGINS` | 前后端分域时的前端域名 |
 | `deploy/env/prod.env` | 同上两项 | |
-| `web/.env.staging` | `VITE_SENTRY_DSN` | 建议单独建一个 Sentry 项目，别复用生产的；**不填则线上零监控** |
-| `web/.env.production` | `VITE_SENTRY_DSN` | 生产 Sentry DSN；也可留空，改在构建时注入 |
+| `web/.env.staging` | `VITE_SENTRY_DSN` | **不写在这个文件里**，由 compose 的 build arg `SENTRY_DSN` 注入；不注入则 staging 零监控 |
+| `web/.env.production` | `VITE_SENTRY_DSN` | **不写在这个文件里**，由 compose 的 build arg `SENTRY_DSN` 注入；不注入则线上零监控 |
 | `deploy/docker-compose.staging.yml` | `nginx.ports` | 放开 `443`，补 `certs` 挂载 |
 
 ### 必须由部署环境注入、不能进仓库的值
