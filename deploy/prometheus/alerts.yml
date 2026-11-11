@@ -118,6 +118,71 @@ groups:
           summary: "前端 JS 错误激增"
           runbook: "去 Sentry 的 Issues 按 Release 对比，通常是某次发版引入；必要时回滚。"
 
+  # ── 诊断助手（agent）──
+  #
+  # agent 是「可降级」组件：它挂了用户只是没有对话入口，体检页照常用。
+  # 所以这里的严重度普遍低于网关那几组 —— 除了 AgentBudgetExhausted，
+  # 那条意味着有人的提问会被吞掉，且钱已经在往外花。
+  - name: agent
+    rules:
+      - alert: AgentDown
+        expr: up{job="agent"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "诊断助手不可达"
+          runbook: "先看 AGENT_ENABLED 是不是 0（刻意关闭不算故障）；再 docker compose logs agent 看进程有没有起在 3001。网关本身正常时，这是唯一影响面。"
+
+      - alert: AgentCitationDropped
+        # 引用被校验剔掉 = 模型说了台账里没有的证据。任何一条都不该放过，
+        # 这是「诊断可信」的底线指标，不是性能问题。
+        expr: increase(agent_citation_dropped_total[15m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.kind }} 类引用被剔除 {{ $value }} 次"
+          runbook: "去 trace（/var/log/agent/traces.jsonl）按 rejected_refs>0 找具体那次，看是 finding id 编造还是数字对不上：前者改提示词，后者查工具结果是否被截断。"
+
+      - alert: AgentToolFailureRate
+        # 工具失败 ≠ 一条结果都没有。持续失败会让模型拿不到证据，
+        # 最终落在 inconclusive 上，用户看到的是「查不清」而不是「出错」。
+        expr: |
+          sum(rate(agent_tool_total{ok="false"}[5m]))
+          /
+          clamp_min(sum(rate(agent_tool_total[5m])), 0.1)
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "工具调用失败率 {{ $value | humanizePercentage }}"
+          runbook: "按 tool 拆：sum by (tool) (rate(agent_tool_total{ok=\"false\"}[5m]))。集中在一个工具上就去查对应后端接口；全都在失败多半是 token 或 gateway 不可达。"
+
+      - alert: AgentBudgetExhausted
+        # 阈值要和 prod.env 的 AGENT_DAILY_BUDGET_CNY 保持一致（当前 300）。
+        # 这里是**进程内**累计口径，重启归零，所以它回答的是「这个实例还收不收」，
+        # 不是「今天花了多少」——后者看 trace 汇总。
+        expr: agent_daily_cost_cny >= 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "本实例当日诊断花费已达 {{ $value }} 元，闸门将拒绝新请求"
+          runbook: "先看 agent_request_total 是不是有人在刷（QPS 与 user_hash 分布），再决定调高 AGENT_DAILY_BUDGET_CNY 还是等次日自然重置。别为了清计数重启进程——钱不会因此回来。"
+
+      - alert: AgentEventLoopLag
+        # 单线程 + 大量 JSON 处理，同步阻塞会直接拖慢所有并发请求。
+        # 0.2s 已经远超正常抖动（正常在个位数毫秒）。
+        expr: agent_event_loop_lag_seconds > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "事件循环延迟 p99 {{ $value }}s"
+          runbook: "查最近的请求里有没有超大工具结果（BFF 一次返回几千行）在同步 JSON.parse / 字符串拼接。trace 里的 latency_ms 能定位到具体那次。"
+
   # ── 消息可靠性 ──
   #
   # 这一组只看「有没有丢」，不看「快不快」：

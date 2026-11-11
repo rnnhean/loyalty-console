@@ -27,6 +27,7 @@ import (
 	"github.com/example/loyalty-console/server/internal/auth"
 	"github.com/example/loyalty-console/server/internal/blob"
 	"github.com/example/loyalty-console/server/internal/config"
+	"github.com/example/loyalty-console/server/internal/diag"
 	"github.com/example/loyalty-console/server/internal/domain"
 	"github.com/example/loyalty-console/server/internal/exporter"
 	"github.com/example/loyalty-console/server/internal/gateway"
@@ -72,6 +73,13 @@ func run() error {
 	// 根 ctx：SIGINT/SIGTERM 时取消，所有后台 goroutine 与在途请求一起收尾
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// ── 诊断规则注册表自检 ──
+	// 放在连库之前：规则名重复、缺 Run 这类是纯静态问题，跟数据库无关。
+	// 配置错必须在启动时炸，而不是等运营点进诊断页才发现某条规则永远跑不了。
+	if err := diag.Validate(); err != nil {
+		return err
+	}
 
 	// ── 数据源 ──
 	st, err := store.Open(ctx, store.Config{
@@ -169,16 +177,20 @@ func run() error {
 	// 前端监控上报：匿名可达，所以单独一档限流 + 白名单校验
 	r.POST("/api/telemetry/beacon", gateway.RateLimit(telemetryLimiter), gateway.Telemetry())
 
+	// 受保护路由共用的鉴权中间件。
+	// 抽成变量是为了让 /api/diag/batch 那组能复用同一条鉴权链、但换一个超时。
+	requireAuth := gateway.Auth(func(token string) (gateway.Operator, error) {
+		id, err := issuer.Verify(token)
+		if err != nil {
+			return gateway.Operator{}, err
+		}
+		return gateway.Operator{ID: id.ID, Role: id.Role}, nil
+	})
+
 	// 受保护路由
 	api := r.Group("/api",
 		gateway.RateLimit(apiLimiter),
-		gateway.Auth(func(token string) (gateway.Operator, error) {
-			id, err := issuer.Verify(token)
-			if err != nil {
-				return gateway.Operator{}, err
-			}
-			return gateway.Operator{ID: id.ID, Role: id.Role}, nil
-		}),
+		requireAuth,
 		gateway.Timeout(time.Duration(envInt("MC_REQUEST_TIMEOUT_SEC", 6))*time.Second),
 	)
 
@@ -234,6 +246,28 @@ func run() error {
 	api.GET("/channel/attribution", listAttribution(channel))
 	api.GET("/setting/toggles", listToggles(setting))
 	api.GET("/catalog/binds", listBinds(catalog))
+
+	// ── 诊断 ──
+	// 数据源在这里构造：规则只认 DataSource 接口，不认 *store.Store，
+	// 这样规则本身可测，而「怎么连库」这个决定只在这一处。
+	diagDS := &diag.SQLSource{DB: st.DB}
+
+	api.GET("/diag/checks", listChecks())
+	api.GET("/diag/run/:name", runCheck(diagDS))
+
+	// 体检单独一组，换一个更长的超时。
+	//
+	// 为什么不能直接挂在 api 组下：gateway.Timeout 是用 context.WithTimeout
+	// 套在 c.Request.Context() 上的，而 WithTimeout 取的是**更早**的那个 deadline。
+	// 挂在 6s 的组里再套 30s，实际生效的仍是父级的 6s——串行跑 5~8 条规则时，
+	// 后面的规则会成批超时，页面显示一片「没能执行」。
+	// 所以必须从路由层重开一条链，而不是在 handler 里再套一层。
+	audit := r.Group("/api/diag",
+		gateway.RateLimit(apiLimiter),
+		requireAuth,
+		gateway.Timeout(time.Duration(envInt("MC_AUDIT_TIMEOUT_SEC", 35))*time.Second),
+	)
+	audit.POST("/batch", runBatch(diagDS))
 
 	// ── 基础设施能力接口 ──
 	//

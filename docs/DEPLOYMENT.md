@@ -15,25 +15,33 @@
         │  TLS / 限流 / CSP│
         └───┬─────────┬───┘
             │         │
-     ┌──────▼──┐  ┌───▼──────┐
-     │  web    │  │ gateway  │   edge 网段（应用侧）
-     │ nginx   │  │  :8080   │
-     │  :80    │  │  Go      │
-     └─────────┘  └───┬──────┘
-                      │
-          ┌───────────┴───────────┐
-          │      data 网段        │  internal: true
-     ┌────▼────┐          ┌───────▼──┐
-     │  mysql  │          │  redis   │   ← 均不 publish 端口
-     │  :3306  │          │  :6379   │
-     └─────────┘          └──────────┘
-     ┌─────────┐  ┌──────────┐  ┌───────┐
+     ┌──────▼──┐  ┌───▼──────┐  ┌─────────┐
+     │  web    │  │ gateway  │  │  agent  │   edge 网段（应用侧）
+     │ nginx   │  │  :8080   │  │  :3001  │
+     │  :80    │  │  Go      │  │ Node    │
+     └─────────┘  └───┬──────┘  └────┬────┘
+                      │              │ nginx 把 /api/agent/ 转给 agent
+                      │              │ agent 再回头调 gateway 的诊断接口
+                      │              │ 并对外访问模型 API（走 edge 的出口）
+          ┌───────────┴───────────┐  │
+          │      data 网段        │  │  ← agent **不挂 data**：
+     ┌────▼────┐          ┌───────▼──┐│     它不需要碰数据库
+     │  mysql  │          │  redis   ││   ← 均不 publish 端口
+     │  :3306  │          │  :6379   ││
+     └─────────┘          └──────────┘│
+     ┌─────────┐  ┌──────────┐  ┌─────┴─┐
      │  kafka  │  │ rabbitmq │  │ minio │
      │  :9092  │  │  :5672   │  │ :9000 │   ← 只有 minio 的 S3 口对公网
      └─────────┘  └──────────┘  └───────┘
 
           observ 网段：prometheus / grafana / node-exporter
 ```
+
+> **`agent` 是可降级的旁路。** 它没在 nginx 的 `depends_on` 里：
+> 把实验性功能加进启动依赖链，等于让它的故障升级成全站起不来。
+> 上线默认 `AGENT_ENABLED=0`（服务起来、`/healthz` 正常，但接口一律回「未启用」），
+> 配齐 `AGENT_BASE_URL` / `AGENT_API_KEY` / 单价之后再改成 `1`。
+> 细节见 `TECH-DESIGN-AGENT.md` §6.1.1 与 §9。
 
 三个设计决定，都是有代价的取舍：
 
@@ -44,6 +52,7 @@
 
 **2. `/metrics` 只挂在 observ 网段。**
 gateway 同时接入 `edge`（给 nginx 转发）和 `observ`（给 Prometheus 抓取）。
+agent 同理：它只把 `/api/agent/` 前缀交给 nginx，`/metrics` 挂在 observ 上由 Prometheus 直连 `agent:3001`。
 边缘 nginx 里再加一条 `allow 内网 / deny all` 作为第二道保险。
 代价：多一个网段；收益：监控数据不随公网泄露内部路由结构。
 
@@ -221,7 +230,9 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod \
 docker compose -f docker-compose.prod.yml ps
 ```
 
-**只重建 gateway 和 web**，不碰 mysql/redis —— 后者重建会带断连。
+**只重建实际变化的服务**，不碰 mysql/redis —— 后者重建会带断连。
+改了 agent 代码就把它加进那一行（`up -d --build gateway web agent`）；
+只改 agent 的环境变量则 `up -d agent` 就够，不必重建镜像。
 
 ### 前端镜像必须带上的两个变量
 
@@ -309,8 +320,9 @@ APP_VERSION=1.1.0 docker compose -f docker-compose.prod.yml up -d --build web ga
 | nginx 起来就退出 | `deploy/certs/` 里没有 `fullchain.pem` / `privkey.pem` |
 | 页面 502 | gateway 没健康：`docker compose logs gateway`；常见是 MySQL 还没起来 |
 | 页面能开但接口全 401 | ticket 过期（`MC_TOKEN_TTL_MIN`）或 `MC_TOKEN_SECRET` 改过 |
-| Grafana 面板全空 | Prometheus 抓不到：`curl gateway:8080/metrics`（在网关容器内）；确认 gateway 挂在 observ 网段 |
+| Grafana 面板全空 | Prometheus 抓不到：`curl gateway:8080/metrics`（在网关容器内）；确认 gateway 挂在 observ 网段。agent 的曲线全空同理：`docker compose exec agent node -e "fetch('http://127.0.0.1:3001/metrics').then(r=>r.text()).then(console.log)"`，并确认 Prometheus 的 `job_name: agent` 指向 `agent:3001` |
 | 登录一直转圈 | `MC_REDIS_ADDR` / `MC_REDIS_PASSWORD` 不对，缓存层超时 |
+| Kafka 组是 `Stable`、成员也在，但一个事件都没消费 | 成员分到了 **0 个分区**（`kafka-consumer-groups.sh --describe --group <组名>` 的 `#PARTITIONS` 列为 0）。kafka-go 启动时偶发 join 成功但分区分配为空，`FetchMessage` 既不返回也不报错，看起来「消费正常」其实什么都没读。**重启 gateway** 让它重新 join，`#PARTITIONS` 变成 1 后即可消费。本地 e2e 首次启动踩到过，不是配置问题 |
 | 前端报 CSP 拦截 | 新增了外部域名，要同步改 `nginx/conf.d/site.conf` 的 `connect-src` / `script-src` |
 
 ---

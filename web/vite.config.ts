@@ -1,4 +1,7 @@
-import { defineConfig, loadEnv } from 'vite';
+// defineConfig 从 vitest/config 取：它转发 vite 的同名配置并额外认识 test 段，
+// 这样单元测试配置和构建配置留在一份文件里，别名不用写两遍（写两遍就会漂）。
+import { defineConfig } from 'vitest/config';
+import { loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { sentryVitePlugin } from '@sentry/vite-plugin';
 import { execSync } from 'node:child_process';
@@ -72,7 +75,12 @@ export default defineConfig(({ mode }) => {
                 : []),
         ],
         resolve: {
-            alias: { '@': path.resolve(__dirname, 'src') },
+            alias: {
+                '@': path.resolve(__dirname, 'src'),
+                // 前后端共用的契约类型。只有类型，构建时被完全擦除，
+                // 所以这里配别名只是为了 tsc 和编辑器能解析 import。
+                '@shared': path.resolve(__dirname, '../shared'),
+            },
         },
         css: {
             preprocessorOptions: {
@@ -88,6 +96,12 @@ export default defineConfig(({ mode }) => {
             // 开发期走代理而不是直连 8080：前端代码里就不需要写死后端地址，
             // 生产环境同源部署时也不用改。
             proxy: {
+                // 必须排在 /api 之前：key 的顺序就是匹配顺序，
+                // 放后面会被 /api 那条先吃掉，诊断请求就打到 Go 网关去了（404）。
+                '/api/agent': {
+                    target: env.VITE_AGENT_ORIGIN || 'http://127.0.0.1:3001',
+                    changeOrigin: true,
+                },
                 '/api': {
                     target: env.VITE_API_ORIGIN || 'http://127.0.0.1:8080',
                     changeOrigin: true,
@@ -100,6 +114,12 @@ export default defineConfig(({ mode }) => {
                 // 生产环境在 nginx 里也要发同一个头，见 deploy/nginx/conf.d/site.conf。
                 'Document-Policy': 'js-profiling',
             },
+        },
+        test: {
+            // 只收 src/ 下的单测。e2e/*.spec.ts 是 Playwright 的用例，
+            // 被 vitest 收进来会因为找不到 @playwright/test 的运行时而整文件报错——
+            // 那不是「测试失败」，是跑错了工具。
+            include: ['src/**/*.test.{ts,tsx}'],
         },
         build: {
             // 有 token：生成隐藏 sourcemap 供上传（bundle 不引用、上传后删除）。

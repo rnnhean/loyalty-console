@@ -5,6 +5,7 @@ import { DOMAINS } from '@/config/console';
 import { ticketStore } from '@/lib/http';
 import { Sentry } from '@/lib/monitor';
 import ConsoleLayout from '@/layout/ConsoleLayout';
+import AuditPage from '@/pages/AuditPage';
 import DataPage from '@/pages/DataPage';
 import Dashboard from '@/pages/Dashboard';
 import Login from '@/pages/Login';
@@ -56,9 +57,16 @@ export default function App() {
                         }
                     >
                         <Route index element={<Dashboard />} />
+                        <Route path="audit" element={<AuditPage />} />
                         {DOMAINS.flatMap((d) =>
                             d.pages.map((p) => (
-                                <Route key={p.path} path={p.path.replace(/^\//, '')} element={<DataPage def={p} />} />
+                                // key 必须带 path：同一个 DataPage 组件在不同路由间复用时，
+                                // useState 的初值只算一次，从证据链接跳进来会读到上一个页面的筛选值
+                                <Route
+                                    key={p.path}
+                                    path={p.path.replace(/^\//, '')}
+                                    element={<DataPage key={p.path} def={p} />}
+                                />
                             )),
                         )}
                         <Route path="*" element={<NotFound />} />

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
     Alert,
     Button,
@@ -16,7 +17,7 @@ import dayjs from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
 import { http, type ListPayload } from '@/lib/http';
 import { reportApiError } from '@/lib/monitor';
-import type { CellKind, ColumnDef, PageDef } from '@/config/console';
+import { STATE_TEXT, type CellKind, type ColumnDef, type PageDef } from '@/config/console';
 import './DataPage.less';
 
 type Row = Record<string, unknown>;
@@ -45,7 +46,7 @@ function renderCell(v: unknown, kind?: CellKind) {
             return dayjs(String(v)).isValid() ? dayjs(String(v)).format('YYYY-MM-DD HH:mm:ss') : String(v);
         case 'state': {
             const n = Number(v);
-            return <Tag color={STATE_COLOR[n] || 'default'}>{n === 1 ? '启用' : n === 2 ? '停用' : '草稿'}</Tag>;
+            return <Tag color={STATE_COLOR[n] || 'default'}>{STATE_TEXT[n] ?? '—'}</Tag>;
         }
         case 'online': {
             const n = Number(v);
@@ -135,6 +136,10 @@ function loadProductOptions(def: PageDef): Promise<ProductOption[]> {
 }
 
 export default function DataPage({ def }: { def: PageDef }) {
+    const [sp, setSp] = useSearchParams();
+    /** 诊断结论里的证据链接会带 focus=<行 id>，用于高亮并滚动到该行 */
+    const focus = sp.get('focus');
+
     const [rows, setRows] = useState<Row[]>([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
@@ -143,10 +148,11 @@ export default function DataPage({ def }: { def: PageDef }) {
     const [error, setError] = useState<string>('');
 
     const [products, setProducts] = useState<ProductOption[]>([]);
-    const [product, setProduct] = useState<string>('');
-    const [keyword, setKeyword] = useState('');
+    // 初值从地址栏读：证据跳转会带上 product，刷新后也要保持同一视图
+    const [product, setProduct] = useState<string>(() => sp.get('product') ?? '');
+    const [keyword, setKeyword] = useState(() => sp.get('keyword') ?? '');
     /** 搜索框的已提交值（点搜索/回车才生效，输入过程不请求） */
-    const [committedKeyword, setCommittedKeyword] = useState('');
+    const [committedKeyword, setCommittedKeyword] = useState(() => sp.get('keyword') ?? '');
 
     // 每次请求自增，回来时对不上就丢弃 —— 防止慢请求覆盖新结果
     const seqRef = useRef(0);
@@ -209,6 +215,23 @@ export default function DataPage({ def }: { def: PageDef }) {
         };
     }, [def]);
 
+    /** 用户手动改筛选时清掉 focus —— 高亮的是上一次的证据行，换了条件就没意义了 */
+    const clearFocus = useCallback(() => {
+        if (!focus) return;
+        const next = new URLSearchParams(sp);
+        next.delete('focus');
+        setSp(next, { replace: true });
+    }, [focus, sp, setSp]);
+
+    /** 把筛选状态写回地址栏（replace，不新增历史），让链接可复制、刷新后仍在同一视图 */
+    useEffect(() => {
+        const next = new URLSearchParams();
+        if (product) next.set('product', product);
+        if (committedKeyword) next.set('keyword', committedKeyword);
+        if (focus) next.set('focus', focus);
+        if (next.toString() !== sp.toString()) setSp(next, { replace: true });
+    }, [product, committedKeyword, focus, sp, setSp]);
+
     /**
      * 首屏策略：
      *   - 无产品筛选的页面：直接查；
@@ -219,6 +242,12 @@ export default function DataPage({ def }: { def: PageDef }) {
         if (def.productFilter) {
             if (!products.length || autoPickedRef.current) return;
             autoPickedRef.current = true;
+
+            // 地址栏已指定产品（证据跳转带来的）：直接查它，不再自动挑第一个有数据的
+            if (product) {
+                void query({ productValue: product, pageValue: 1, kw: committedKeyword });
+                return;
+            }
 
             void (async () => {
                 for (const p of products.slice(0, 6)) {
@@ -234,9 +263,19 @@ export default function DataPage({ def }: { def: PageDef }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [def.path, products.length]);
 
+    /** focus 命中后滚到中间，等表格渲染完再滚 */
+    useEffect(() => {
+        if (!focus || !rows.length) return undefined;
+        const timer = window.setTimeout(() => {
+            document.querySelector('.row-focus')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }, 100);
+        return () => window.clearTimeout(timer);
+    }, [focus, rows]);
+
     const handleSearch = () => {
         setPage(1);
         setCommittedKeyword(keyword);
+        clearFocus();
         void query({ pageValue: 1, kw: keyword });
     };
 
@@ -258,6 +297,7 @@ export default function DataPage({ def }: { def: PageDef }) {
                                     const val = (v as string) || '';
                                     setProduct(val);
                                     setPage(1);
+                                    clearFocus();
                                     void query({ productValue: val, pageValue: 1 });
                                 }}
                                 options={products.map((p) => ({
@@ -308,6 +348,7 @@ export default function DataPage({ def }: { def: PageDef }) {
             <Card bordered={false} className="data-page__table">
                 <Table<Row>
                     rowKey={(r, i) => String(r[def.rowKey || 'uid'] ?? i)}
+                    rowClassName={(r) => (focus && String(r[def.rowKey || 'uid']) === focus ? 'row-focus' : '')}
                     columns={toColumns(def.columns)}
                     dataSource={rows}
                     loading={loading}

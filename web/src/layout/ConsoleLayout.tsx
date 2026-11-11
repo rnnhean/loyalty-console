@@ -5,8 +5,10 @@ import {
     ApiOutlined,
     AppstoreOutlined,
     CrownOutlined,
+    DashboardOutlined,
     FundProjectionScreenOutlined,
     LogoutOutlined,
+    MedicineBoxOutlined,
     MenuFoldOutlined,
     MenuUnfoldOutlined,
     ClusterOutlined,
@@ -16,6 +18,7 @@ import {
 } from '@ant-design/icons';
 import { DOMAINS, domainOf, PAGE_INDEX } from '@/config/console';
 import { ticketStore } from '@/lib/http';
+import AgentHost from '@/components/AgentDrawer';
 import './ConsoleLayout.less';
 
 const { Header, Sider, Content } = Layout;
@@ -35,8 +38,20 @@ export default function ConsoleLayout() {
     const navigate = useNavigate();
 
     const menuItems = useMemo(
-        () =>
-            DOMAINS.map((d) => ({
+        () => [
+            {
+                key: 'overview',
+                icon: <DashboardOutlined />,
+                label: <Link to="/">工作台</Link>,
+            },
+            {
+                // 体检页不属于任何一个业务域：它同时检查多个域。
+                // 塞进某个域的二级菜单会让人以为它只管那个域。
+                key: 'audit',
+                icon: <MedicineBoxOutlined />,
+                label: <Link to="/audit">运营体检</Link>,
+            },
+            ...DOMAINS.map((d) => ({
                 key: d.key,
                 icon: ICONS[d.icon] ?? <ApiOutlined />,
                 label: d.title,
@@ -45,6 +60,7 @@ export default function ConsoleLayout() {
                     label: <Link to={p.path}>{p.title}</Link>,
                 })),
             })),
+        ],
         [],
     );
 
@@ -56,11 +72,15 @@ export default function ConsoleLayout() {
 
     const page = PAGE_INDEX[location.pathname];
     const domain = domainOf(location.pathname);
+    // 体检页不在 DOMAINS 里（它跨域），面包屑单独补一级，
+    // 否则从菜单点进来时会显示成「首页」而没有当前页。
+    const isAudit = location.pathname === '/audit';
 
     const crumbs = [
         { title: '首页' },
         ...(domain ? [{ title: domain.title }] : []),
         ...(page ? [{ title: page.title }] : []),
+        ...(isAudit ? [{ title: '运营体检' }] : []),
     ];
 
     const handleLogout = () => {
@@ -129,6 +149,9 @@ export default function ConsoleLayout() {
                     <Outlet />
                 </Content>
             </Layout>
+
+            {/* 诊断助手挂在布局层：任何页面都能唤起，不随路由卸载 */}
+            <AgentHost />
         </Layout>
     );
 }

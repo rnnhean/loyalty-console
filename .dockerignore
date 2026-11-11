@@ -1,0 +1,22 @@
+# 只作用于「构建上下文 = 仓库根」的镜像，目前只有 agent（见 agent/Dockerfile）。
+# web / server 的上下文分别是 ../web 和 ../server，各有自己的清单，不受这里影响。
+
+# 依赖与构建产物
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+
+# 与镜像无关的一切
+.git
+docs
+deploy
+scripts
+web
+server
+agent/eval
+agent/src/**/*.test.ts
+
+# 本地产物与密钥
+**/.env
+**/.env.*.local
+**/*.log

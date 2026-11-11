@@ -1,0 +1,4 @@
+[
+  "{\"tool_calls\":[{\"id\":\"c1\",\"name\":\"run_checks\",\"arguments\":{\"checks\":[\"orphan_rules\",\"voucher_health\"]}}]}",
+  "{\"kind\":\"diagnosis\",\"title\":\"有权益规则没有挂到任何权益包\",\"phenomenon\":\"orphan_rules 扫到多条规则没有 group_uid，用户完成任务后领不到对应权益。\",\"judgement\":\"规则没有被任何权益包引用，判定为 issue；券批次健康检查通过。\",\"advice\":[{\"text\":\"去权益规则页把这几条规则挂到对应权益包\",\"ref\":{\"path\":\"/benefit/rules\"},\"evidence_ref\":\"orphan_rules/rule:10007\"}],\"finding_ids\":[\"orphan_rules/rule:10007\"],\"confidence\":0.9}"
+]

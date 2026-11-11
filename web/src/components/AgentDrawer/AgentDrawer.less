@@ -1,0 +1,247 @@
+@accent: #4f7cff;
+@accent-2: #8a5cf6;
+@ink: #1f2733;
+@muted: #5b6373;
+
+// ── 悬浮入口 ────────────────────────────────────────────────
+.agent-entry {
+    position: fixed;
+    right: 28px;
+    bottom: 32px;
+    z-index: 30;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 44px;
+    padding: 0 18px;
+    border: none;
+    border-radius: 22px;
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+    background: linear-gradient(135deg, @accent, @accent-2);
+    box-shadow: 0 8px 24px rgba(79, 124, 255, 0.35);
+    transition:
+        transform 0.15s ease,
+        opacity 0.15s ease;
+
+    &:hover {
+        transform: translateY(-2px);
+    }
+
+    &--hidden {
+        opacity: 0;
+        pointer-events: none;
+    }
+}
+
+// ── 抽屉 ────────────────────────────────────────────────────
+.agent-drawer {
+    .ant-drawer-body {
+        display: flex;
+        flex-direction: column;
+        padding: 16px 20px;
+    }
+
+    .ant-drawer-footer {
+        padding: 12px 20px 16px;
+        border-top: 1px solid #eef0f4;
+    }
+}
+
+.agent-thread {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.agent-turn {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+
+    &__question {
+        align-self: flex-end;
+        max-width: 85%;
+        padding: 10px 14px;
+        border-radius: 12px 12px 2px 12px;
+        background: #eef2ff;
+        color: @ink;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+}
+
+// ── 步骤条 ──────────────────────────────────────────────────
+.agent-steps {
+    margin: 0;
+    padding: 0 0 0 4px;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    &__item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: @muted;
+    }
+
+    &__item--running .agent-steps__icon {
+        color: @accent;
+    }
+
+    &__item--done .agent-steps__icon {
+        color: #22a06b;
+    }
+
+    &__item--failed .agent-steps__icon {
+        color: #d4380d;
+    }
+
+    &__label {
+        word-break: break-word;
+    }
+}
+
+// ── 报告卡 ──────────────────────────────────────────────────
+.agent-report {
+    padding: 14px 16px;
+    border: 1px solid #e6e9f0;
+    border-left: 3px solid @accent;
+    border-radius: 10px;
+    background: #fff;
+
+    &--query {
+        border-left-color: #8a5cf6;
+    }
+
+    &--out_of_scope {
+        border-left-color: #b8bec9;
+    }
+
+    &__head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 10px;
+    }
+
+    &__title {
+        margin: 0 !important;
+        color: @ink;
+    }
+
+    &__confidence {
+        margin-left: auto;
+        font-size: 12px;
+    }
+
+    &__section {
+        margin-top: 10px;
+    }
+
+    &__text {
+        margin: 4px 0 0 !important;
+        color: @ink;
+        line-height: 1.7;
+        white-space: pre-wrap;
+    }
+
+    &__advice {
+        margin: 6px 0 0;
+        padding-left: 20px;
+        color: @ink;
+        line-height: 1.8;
+
+        li + li {
+            margin-top: 4px;
+        }
+    }
+
+    &__link {
+        margin-left: 8px;
+        color: @accent;
+        white-space: nowrap;
+    }
+
+    &__foot {
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px dashed #eef0f4;
+        font-size: 12px;
+    }
+
+    &__checks {
+        word-break: break-word;
+    }
+
+    &__stop {
+        margin-top: 10px;
+    }
+}
+
+.agent-thinking {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: @muted;
+    font-size: 13px;
+}
+
+// ── 空态与输入 ──────────────────────────────────────────────
+.agent-empty {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-top: 12px;
+
+    &__samples {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+}
+
+.agent-sample {
+    padding: 10px 12px;
+    border: 1px solid #e6e9f0;
+    border-radius: 8px;
+    background: #fafbfd;
+    color: @ink;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover {
+        border-color: @accent;
+        background: #f2f5ff;
+    }
+}
+
+.agent-composer {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+
+    &__actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+    }
+
+    &__hint {
+        font-size: 12px;
+    }
+}

@@ -1,0 +1,1095 @@
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>运营诊断助手</title>
+<style>
+/* ── 设计变量：全部沿用管理台现有视觉规范 ─────────────────────
+   主色 #4f7cff / 侧栏 #1f2733 / 内容底 #f6f7fb / 圆角 8 */
+:root{
+  --brand:#4f7cff;
+  --brand-2:#8a5cf6;
+  --brand-soft:#eef3ff;
+  --bg:#f6f7fb;
+  --surface:#ffffff;
+  --surface-2:#fafbfd;
+  --line:#e8eaf0;
+  --line-2:#f0f2f7;
+  --ink:#1f2733;
+  --ink-2:#5b6474;
+  --ink-3:#8f97a8;
+  --sider:#1f2733;
+  --sider-ink:#c3cad8;
+  --sider-ink-2:#7d8798;
+  --ok:#15803d;
+  --ok-soft:#e9f7ee;
+  --warn:#b45309;
+  --warn-soft:#fdf4e3;
+  --warn-line:rgba(180,83,9,.18);
+  --bad:#b91c1c;
+  --bad-soft:#fdecec;
+  --shadow:0 1px 2px rgba(31,39,51,.06),0 8px 24px rgba(31,39,51,.08);
+  --radius:8px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --brand:#6b8dff; --brand-2:#a882ff; --brand-soft:#1e2740;
+    --bg:#14161a; --surface:#1b1e24; --surface-2:#20242b;
+    --line:#2c313b; --line-2:#262b34;
+    --ink:#e8eaf0; --ink-2:#a9b2c3; --ink-3:#7c8698;
+    --sider:#11141a; --sider-ink:#b9c1d0; --sider-ink-2:#6e7789;
+    --ok:#5ed08a; --ok-soft:#14301f;
+    --warn:#f0b053; --warn-soft:#33260f; --warn-line:rgba(240,176,83,.22);
+    --bad:#f08a8a; --bad-soft:#3a1a1a;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 32px rgba(0,0,0,.45);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --brand:#6b8dff; --brand-2:#a882ff; --brand-soft:#1e2740;
+  --bg:#14161a; --surface:#1b1e24; --surface-2:#20242b;
+  --line:#2c313b; --line-2:#262b34;
+  --ink:#e8eaf0; --ink-2:#a9b2c3; --ink-3:#7c8698;
+  --sider:#11141a; --sider-ink:#b9c1d0; --sider-ink-2:#6e7789;
+  --ok:#5ed08a; --ok-soft:#14301f;
+  --warn:#f0b053; --warn-soft:#33260f; --warn-line:rgba(240,176,83,.22);
+  --bad:#f08a8a; --bad-soft:#3a1a1a;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 32px rgba(0,0,0,.45);
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;
+  font-size:14px;
+  line-height:1.6;
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-block:24px 40px;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ── 说明头 ─────────────────────────────────────────────── */
+.spec{max-width:1240px;margin:0 auto 16px;display:flex;flex-wrap:wrap;gap:14px 20px;align-items:flex-end;justify-content:space-between}
+.spec h1{margin:0;font-size:20px;line-height:1.3;letter-spacing:-.01em;text-wrap:balance}
+.spec p{margin:4px 0 0;color:var(--ink-2);font-size:13px;max-width:60ch}
+.spec-tools{display:flex;gap:8px;flex-wrap:wrap}
+.spec-tools button{
+  appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
+  font:inherit;font-size:12.5px;padding:5px 12px;border-radius:999px;cursor:pointer;
+  transition:background .15s,color .15s,border-color .15s;
+}
+.spec-tools button:hover{border-color:var(--brand);color:var(--brand)}
+.spec-tools button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+
+/* ── 控制台框架 ─────────────────────────────────────────── */
+.frame{
+  max-width:1240px;margin:0 auto;
+  display:grid;grid-template-columns:216px minmax(0,1fr);
+  background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  overflow:hidden;box-shadow:var(--shadow);min-height:680px;
+}
+
+/* 侧栏 */
+.sider{background:var(--sider);color:var(--sider-ink);padding:16px 0;display:flex;flex-direction:column;gap:2px;min-width:0}
+.brand{display:flex;align-items:center;gap:10px;padding:0 18px 18px}
+.brand-mark{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--brand),var(--brand-2));flex:none}
+.brand-name{color:#fff;font-weight:600;font-size:14px;letter-spacing:.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nav-group{padding:6px 10px 0}
+.nav-dom{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:6px;color:var(--sider-ink);font-size:13.5px}
+.nav-dom svg{flex:none;opacity:.75}
+.nav-dom.is-open{color:#fff}
+.nav-sub{padding:2px 0 8px 20px;display:flex;flex-direction:column;gap:1px}
+.nav-sub a{
+  color:var(--sider-ink-2);text-decoration:none;font-size:13px;padding:5px 10px;border-radius:6px;
+  display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.nav-sub a:hover{color:#fff;background:rgba(255,255,255,.05)}
+.nav-sub a[aria-current="page"]{color:#fff;background:rgba(79,124,255,.22);box-shadow:inset 2px 0 0 var(--brand)}
+
+/* 主区 */
+.main{display:flex;flex-direction:column;min-width:0;position:relative;background:var(--bg)}
+.topbar{
+  height:56px;flex:none;background:var(--surface);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:10px;padding:0 20px;
+}
+.crumb{color:var(--ink-3);font-size:13px;display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;white-space:nowrap}
+.crumb b{color:var(--ink);font-weight:600}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:12px;flex:none}
+.avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;font-size:12px;display:grid;place-items:center;font-weight:600}
+
+.content{padding:16px 20px 24px;flex:1;min-width:0;overflow:hidden}
+.page-head{display:flex;align-items:baseline;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.page-head h2{margin:0;font-size:17px;letter-spacing:-.01em}
+.page-head span{color:var(--ink-3);font-size:12.5px}
+.filters{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.chip-sel{
+  border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:5px 10px;
+  font-size:12.5px;color:var(--ink-2);display:flex;align-items:center;gap:6px;
+}
+.chip-sel b{color:var(--ink);font-weight:500}
+.table-wrap{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{
+  text-align:left;font-weight:500;color:var(--ink-3);background:var(--surface-2);
+  padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;
+}
+td{padding:10px 12px;border-bottom:1px solid var(--line-2);color:var(--ink-2);white-space:nowrap}
+td.name{color:var(--ink);font-weight:500;max-width:230px;overflow:hidden;text-overflow:ellipsis}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;padding:1px 7px;border-radius:4px;line-height:1.7}
+.tag-on{background:var(--ok-soft);color:var(--ok)}
+.num{font-variant-numeric:tabular-nums}
+
+/* ── 诊断抽屉 ───────────────────────────────────────────── */
+.drawer{
+  position:absolute;top:0;right:0;bottom:0;width:min(468px,100%);
+  background:var(--surface);border-left:1px solid var(--line);
+  display:flex;flex-direction:column;min-width:0;
+  box-shadow:-16px 0 40px rgba(31,39,51,.07);
+}
+.drawer-head{
+  height:56px;flex:none;display:flex;align-items:center;gap:10px;padding:0 12px 0 16px;
+  border-bottom:1px solid var(--line);background:var(--surface);
+}
+.drawer-title{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px}
+.spark{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,var(--brand),var(--brand-2));display:grid;place-items:center;flex:none}
+.spark svg{width:13px;height:13px}
+.badge-ro{
+  font-size:11px;color:var(--ink-3);border:1px solid var(--line);border-radius:4px;padding:0 5px;line-height:1.7;
+}
+.head-tools{margin-left:auto;display:flex;align-items:center;gap:2px}
+.icon-btn{
+  appearance:none;border:0;background:transparent;color:var(--ink-3);
+  width:28px;height:28px;border-radius:6px;cursor:pointer;display:grid;place-items:center;
+}
+.icon-btn:hover{background:var(--surface-2);color:var(--ink)}
+.icon-btn:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
+.icon-btn svg{width:15px;height:15px}
+
+.ctx-bar{
+  flex:none;display:flex;align-items:center;gap:8px;padding:8px 16px;
+  background:var(--surface-2);border-bottom:1px solid var(--line-2);font-size:12px;color:var(--ink-3);
+}
+.ctx-pill{
+  display:inline-flex;align-items:center;gap:6px;background:var(--brand-soft);color:var(--brand);
+  border-radius:999px;padding:2px 4px 2px 9px;font-size:12px;max-width:100%;
+}
+.ctx-pill span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ctx-x{
+  appearance:none;border:0;background:transparent;color:inherit;font-size:13px;line-height:1;
+  cursor:pointer;padding:2px 5px;border-radius:50%;opacity:.7;
+}
+.ctx-x:hover{opacity:1;background:rgba(79,124,255,.14)}
+
+.stream{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:16px;min-height:0;scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){ .stream{scroll-behavior:auto} }
+
+/* 用户气泡 */
+.user-row{display:flex;justify-content:flex-end}
+.user-msg{
+  background:var(--brand);color:#fff;border-radius:10px 10px 2px 10px;
+  padding:9px 13px;max-width:86%;font-size:13.5px;line-height:1.55;word-break:break-word;
+}
+
+/* 空态 */
+.empty{display:flex;flex-direction:column;gap:14px;padding-top:6px}
+.empty h3{margin:0;font-size:15.5px;font-weight:600;text-wrap:balance}
+.empty p{margin:0;color:var(--ink-2);font-size:13px}
+.sugg{display:flex;flex-direction:column;gap:8px}
+.sugg button{
+  appearance:none;text-align:left;border:1px solid var(--line);background:var(--surface);
+  border-radius:var(--radius);padding:10px 12px;font:inherit;font-size:13px;color:var(--ink);
+  cursor:pointer;display:flex;align-items:flex-start;gap:8px;transition:border-color .15s,background .15s;
+}
+.sugg button:hover{border-color:var(--brand);background:var(--brand-soft)}
+.sugg button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.sugg .txt{min-width:0}
+.sugg .why{display:block;color:var(--ink-3);font-size:11.5px;margin-top:2px}
+.sugg .go{margin-left:auto;color:var(--brand);flex:none;font-size:13px;line-height:1.5}
+
+/* 步骤时间线 */
+.steps{display:flex;flex-direction:column;gap:0;position:relative}
+.step{display:grid;grid-template-columns:18px minmax(0,1fr);gap:10px;position:relative;padding-bottom:12px;animation:stepIn .22s ease-out both}
+.step:last-child{padding-bottom:0}
+.step::before{content:"";position:absolute;left:8.5px;top:18px;bottom:-2px;width:1px;background:var(--line)}
+.step:last-child::before{display:none}
+@keyframes stepIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){ .step{animation:none} }
+.dot{
+  width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:10px;
+  background:var(--brand);color:#fff;z-index:1;margin-top:1px;flex:none;font-weight:600;
+}
+.dot.run{background:var(--brand-soft);box-shadow:0 0 0 0 rgba(79,124,255,.45);animation:pulse 1.4s infinite}
+.dot.fail{background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad)}
+.dot.wait{background:var(--line-2);color:var(--ink-3)}
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 rgba(79,124,255,.4)}
+  70%{box-shadow:0 0 0 7px rgba(79,124,255,0)}
+  100%{box-shadow:0 0 0 0 rgba(79,124,255,0)}
+}
+@media (prefers-reduced-motion:reduce){ .dot.run{animation:none;box-shadow:0 0 0 3px var(--brand-soft)} }
+.step-body{min-width:0}
+.step-line{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:13px}
+.step-name{color:var(--ink);font-weight:500}
+.step-res{color:var(--ink-3);font-size:12px}
+.step-res.ok{color:var(--ok)}
+.step-res.fail{color:var(--bad)}
+.toolchip{
+  display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:11px;color:var(--ink-3);background:var(--surface-2);border:1px solid var(--line-2);
+  border-radius:4px;padding:0 5px;line-height:1.8;margin-top:3px;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+
+/* 结论卡 */
+.report{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface);animation:stepIn .26s ease-out both}
+.report-top{
+  display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--line);
+  background:var(--surface-2);
+}
+.report-top h4{margin:0;font-size:14px;font-weight:600;text-wrap:balance}
+.conf{font-size:11px;padding:1px 7px;border-radius:4px;line-height:1.8;margin-left:auto;flex:none;white-space:nowrap}
+.conf.sure{background:var(--ok-soft);color:var(--ok)}
+.conf.need{background:var(--warn-soft);color:var(--warn)}
+.section{padding:12px 14px;border-bottom:1px solid var(--line-2);display:grid;gap:7px}
+.section:last-child{border-bottom:0}
+.sec-label{font-size:11px;color:var(--ink-3);letter-spacing:.08em;font-weight:500;display:flex;align-items:center;gap:6px}
+.sec-label::after{content:"";height:1px;flex:1;background:var(--line-2)}
+.section p{margin:0;font-size:13.5px;line-height:1.65;color:var(--ink)}
+.section p.muted{color:var(--ink-2);font-size:13px}
+
+/* 证据条目 */
+.ev{
+  display:flex;align-items:flex-start;gap:9px;padding:8px 9px;border-radius:6px;
+  border:1px solid var(--line-2);background:var(--surface-2);text-decoration:none;color:inherit;
+  transition:border-color .15s,background .15s;
+}
+.ev:hover{border-color:var(--brand);background:var(--brand-soft)}
+.ev:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
+.ev-mark{width:5px;align-self:stretch;border-radius:3px;background:var(--warn);flex:none}
+.ev-mark.ok{background:var(--ok)}
+.ev-mark.bad{background:var(--bad)}
+.ev-body{min-width:0;font-size:12.5px;line-height:1.55}
+.ev-body b{color:var(--ink);font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev-body span{color:var(--ink-2);display:block}
+.ev-go{margin-left:auto;color:var(--brand);font-size:12px;flex:none;white-space:nowrap;align-self:center}
+
+/* 建议 */
+.advice{display:flex;flex-direction:column;gap:8px}
+.advice-item{display:grid;grid-template-columns:18px minmax(0,1fr);gap:8px;font-size:13px}
+.advice-n{
+  width:18px;height:18px;border-radius:50%;background:var(--brand-soft);color:var(--brand);
+  font-size:11px;display:grid;place-items:center;font-weight:600;margin-top:2px;
+}
+.advice-item a{color:var(--brand);text-decoration:none;border-bottom:1px dashed currentColor;white-space:nowrap}
+.advice-item a:hover{border-bottom-style:solid}
+
+/* 查询型回答：一个数字 + 清单，不套四段卡 */
+.ans{
+  border:1px solid var(--line);border-radius:10px;padding:14px;background:var(--surface);
+  display:grid;gap:12px;animation:stepIn .26s ease-out both;
+}
+.ans-line{margin:0;font-size:13.5px;color:var(--ink-2)}
+.ans-line b{
+  font-size:22px;color:var(--ink);font-variant-numeric:tabular-nums;
+  margin-right:5px;letter-spacing:-.02em;vertical-align:-1px;
+}
+.ans-evs{display:grid;gap:6px}
+.ans-foot{margin:0;font-size:12px;color:var(--ink-3)}
+.ans-more{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  border-top:1px dashed var(--line);padding-top:11px;font-size:12.5px;color:var(--ink-2);
+}
+.ans-more button{
+  appearance:none;border:1px solid var(--brand);background:var(--brand-soft);color:var(--brand);
+  border-radius:6px;padding:2px 11px;font:inherit;font-size:12.5px;cursor:pointer;
+}
+.ans-more button:hover{background:var(--brand);color:#fff}
+.ans-more button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+
+/* 横幅 */
+.banner{
+  display:flex;gap:9px;padding:10px 12px;border-radius:var(--radius);font-size:12.5px;line-height:1.6;
+  background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-line);
+  animation:stepIn .2s ease-out both;
+}
+.banner b{font-weight:600}
+.banner.neutral{background:var(--surface-2);color:var(--ink-2);border-color:var(--line)}
+.banner .bi{flex:none;font-weight:700}
+
+/* 反馈 */
+.feedback{display:flex;align-items:center;gap:8px;padding:2px 4px 0;font-size:12px;color:var(--ink-3);flex-wrap:wrap}
+.feedback button{
+  appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
+  border-radius:6px;padding:3px 10px;font:inherit;font-size:12px;cursor:pointer;
+}
+.feedback button:hover{border-color:var(--brand);color:var(--brand)}
+.feedback button[aria-pressed="true"]{background:var(--brand-soft);border-color:var(--brand);color:var(--brand)}
+.feedback button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.feedback .done{color:var(--brand)}
+
+/* 输入区 */
+.composer{flex:none;border-top:1px solid var(--line);padding:10px 16px 14px;background:var(--surface)}
+.input-wrap{
+  display:flex;align-items:flex-end;gap:8px;border:1px solid var(--line);border-radius:10px;
+  padding:6px 6px 6px 12px;background:var(--surface);transition:border-color .15s,box-shadow .15s;
+}
+.input-wrap:focus-within{border-color:var(--brand);box-shadow:0 0 0 3px rgba(79,124,255,.12)}
+.input-wrap textarea{
+  flex:1;border:0;outline:0;resize:none;font:inherit;font-size:13.5px;line-height:1.6;
+  background:transparent;color:var(--ink);min-height:24px;max-height:96px;padding:4px 0;
+}
+.input-wrap textarea::placeholder{color:var(--ink-3)}
+.send{
+  appearance:none;border:0;background:var(--brand);color:#fff;width:30px;height:30px;border-radius:8px;
+  cursor:pointer;display:grid;place-items:center;flex:none;transition:opacity .15s,background .15s;
+}
+.send:disabled{opacity:.45;cursor:not-allowed}
+.send.stop{background:var(--ink-2)}
+.send svg{width:15px;height:15px}
+.send:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.hint{display:flex;justify-content:space-between;gap:8px;margin-top:6px;font-size:11px;color:var(--ink-3)}
+.hint kbd{
+  font-family:inherit;font-size:10.5px;border:1px solid var(--line);border-radius:3px;
+  padding:0 3px;background:var(--surface-2);color:var(--ink-3);
+}
+
+/* FAB */
+.fab{
+  position:absolute;right:20px;bottom:20px;z-index:2;
+  display:inline-flex;align-items:center;gap:7px;
+  background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;border:0;
+  border-radius:999px;padding:9px 16px 9px 13px;font:inherit;font-size:13px;font-weight:500;
+  cursor:pointer;box-shadow:0 6px 18px rgba(79,124,255,.34);
+}
+.fab:hover{filter:brightness(1.04)}
+.fab:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.fab svg{width:15px;height:15px}
+
+.note{max-width:1240px;margin:14px auto 0;color:var(--ink-3);font-size:12px;line-height:1.7}
+[hidden]{display:none !important}
+
+/* ── 窄屏：抽屉变成整页 ─────────────────────────────────── */
+@media (max-width:900px){
+  body{padding-block:16px 28px}
+  .frame{grid-template-columns:1fr;min-height:0}
+  .sider{display:none}
+  .drawer{position:static;width:auto;border-left:0;border-top:1px solid var(--line);box-shadow:none}
+  .drawer-head{height:52px}
+  .content{padding:12px 14px 16px}
+  .table-wrap{overflow-x:auto}
+  .fab{right:16px;bottom:16px}
+  .spec h1{font-size:18px}
+}
+</style>
+
+<div class="spec">
+  <div>
+    <h1>运营诊断助手</h1>
+    <p>直接在下面输入框里问，或点推荐问题。演示数据取自当前种子库的真实形态，结论是预置的。
+       问「为什么」出四段结论卡，问「有多少」只给一个数加清单——两类问题不该拿到同一种回答。</p>
+  </div>
+  <div class="spec-tools">
+    <button type="button" id="resetBtn">重置对话</button>
+  </div>
+</div>
+
+<div class="frame">
+  <aside class="sider">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-name">运营中台</div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-dom">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M2 6h12"/></svg>
+        商品域
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-dom is-open">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2l5.5 3v6L8 14 2.5 11V5z"/></svg>
+        权益域
+      </div>
+      <div class="nav-sub">
+        <a href="#benefit-tiers">会员层级</a>
+        <a href="#benefit-groups">权益包</a>
+        <a href="#benefit-rules" aria-current="page">权益规则</a>
+        <a href="#benefit-tasks">任务阈值</a>
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-dom">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 5h11l-1 8.5h-9z"/><path d="M5.5 5V3.5a2.5 2.5 0 015 0V5"/></svg>
+        交易域
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-dom">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11M2.5 8h11"/></svg>
+        渠道域
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-dom">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 12.5V7M8 12.5V4M13.5 12.5V9"/></svg>
+        运营域
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-dom">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 2v1.6M8 12.4V14M2 8h1.6M12.4 8H14M3.8 3.8l1.1 1.1M11.1 11.1l1.1 1.1M12.2 3.8l-1.1 1.1M4.9 11.1l-1.1 1.1"/></svg>
+        配置域
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="crumb">权益域 <span>/</span> <b>权益规则</b></div>
+      <div class="topbar-right"><span class="avatar">运</span></div>
+    </div>
+
+    <div class="content">
+      <div class="page-head">
+        <h2>权益规则</h2>
+        <span>发放额度、单位与领取周期</span>
+      </div>
+      <div class="filters">
+        <div class="chip-sel">产品：<b>超级会员</b></div>
+        <div class="chip-sel">状态：<b>全部</b></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th><th>规则名称</th><th>所属权益包</th><th>权益类型</th>
+              <th>额度</th><th>单位</th><th>周期(天)</th><th>状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td class="num">10103</td><td class="name">测试123321</td><td>—</td><td>积分</td><td class="num">1</td><td>件</td><td class="num">1</td><td><span class="tag tag-on">启用</span></td></tr>
+            <tr><td class="num">10102</td><td class="name">123</td><td>—</td><td>积分</td><td class="num">1</td><td>件</td><td class="num">1</td><td><span class="tag tag-on">启用</span></td></tr>
+            <tr><td class="num">10060</td><td class="name">DocHub 文库下载券</td><td>—</td><td>积分</td><td class="num">1</td><td>个</td><td class="num">1</td><td><span class="tag tag-on">启用</span></td></tr>
+            <tr><td class="num">10101</td><td class="name">浏览器售卖文库</td><td>—</td><td>积分</td><td class="num">1</td><td>1</td><td class="num">1</td><td><span class="tag tag-on">启用</span></td></tr>
+            <tr><td class="num">10100</td><td class="name">1119wzz测试02</td><td>—</td><td>下载</td><td class="num">1</td><td>个</td><td class="num">100</td><td><span class="tag tag-on">启用</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <button class="fab" type="button" id="fab" aria-label="打开诊断助手" title="打开诊断助手，自动带入当前页面" hidden>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8l1.5 4.2 4.2 1.5-4.2 1.5L8 13.2 6.5 9 2.3 7.5 6.5 6z"/></svg>
+      诊断
+    </button>
+
+    <!-- ══ 抽屉 ══ -->
+    <aside class="drawer" aria-label="运营诊断助手">
+      <div class="drawer-head">
+        <div class="drawer-title">
+          <span class="spark"><svg viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.6"><path d="M8 2l1.3 3.7L13 7l-3.7 1.3L8 12 6.7 8.3 3 7l3.7-1.3z"/></svg></span>
+          诊断助手
+        </div>
+        <span class="badge-ro">只读</span>
+        <div class="head-tools">
+          <button class="icon-btn" type="button" id="resetIcon" title="重置对话" aria-label="重置对话">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13 8a5 5 0 11-1.6-3.7"/><path d="M13 2.6V5.4h-2.8"/></svg>
+          </button>
+          <button class="icon-btn" type="button" id="closeIcon" title="收起（对话会保留）" aria-label="收起诊断助手">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="ctx-bar" id="ctxbar">
+        <span>上下文</span>
+        <span class="ctx-pill"><span>权益规则 · 产品：超级会员</span><button class="ctx-x" type="button" aria-label="移除上下文">×</button></span>
+      </div>
+
+      <div class="stream" id="stream" aria-live="polite"></div>
+
+      <div class="composer">
+        <div class="input-wrap">
+          <textarea id="ask" rows="1" placeholder="问点什么，比如：这个产品为什么没有权益" aria-label="输入问题"></textarea>
+          <button class="send" type="button" id="send" aria-label="发送" disabled>
+            <svg id="sendIcon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 8h11M9 4l4 4-4 4"/></svg>
+          </button>
+        </div>
+        <div class="hint">
+          <span>只读 · 结论附带来源</span>
+          <span><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span>
+        </div>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<p class="note">演示：问题与结论是预置的，步骤节奏用延时模拟。数据形态来自当前种子库；「只读」表示助手不提供任何写操作入口。</p>
+
+<script>
+(function(){
+  'use strict';
+
+  // ── DOM ────────────────────────────────────────────────
+  var stream   = document.getElementById('stream');
+  var ask      = document.getElementById('ask');
+  var send     = document.getElementById('send');
+  var sendIcon = document.getElementById('sendIcon');
+  var ctxbar   = document.getElementById('ctxbar');
+  var fab      = document.getElementById('fab');
+  var drawer   = document.querySelector('.drawer');
+
+  var running = false;
+  var aborted = false;
+  var firstRun = true;
+
+  var ICON_SEND = '<path d="M2 8h11M9 4l4 4-4 4"/>';
+  var ICON_STOP = '<rect x="4.5" y="4.5" width="7" height="7" rx="1.4" fill="currentColor" stroke="none"/>';
+
+  // ── 工具函数 ────────────────────────────────────────────
+  function wait(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+  function el(tag, cls, html){
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (html != null) n.innerHTML = html;
+    return n;
+  }
+  function scrollBottom(){
+    requestAnimationFrame(function(){ stream.scrollTop = stream.scrollHeight; });
+  }
+  function setMode(mode){
+    running = (mode === 'running');
+    sendIcon.innerHTML = running ? ICON_STOP : ICON_SEND;
+    send.classList.toggle('stop', running);
+    send.setAttribute('aria-label', running ? '停止' : '发送');
+    send.disabled = running ? false : ask.value.trim() === '';
+  }
+
+  // ── 卡片片段 ────────────────────────────────────────────
+  function sec(label, html){
+    return '<div class="section"><div class="sec-label">' + label + '</div>' + html + '</div>';
+  }
+  function evRow(markCls, title, sub, go){
+    return '<a class="ev" href="#" onclick="return false">' +
+      '<span class="ev-mark ' + markCls + '"></span>' +
+      '<span class="ev-body"><b>' + title + '</b><span>' + sub + '</span></span>' +
+      '<span class="ev-go">' + go + '</span></a>';
+  }
+  function advice(items){
+    return '<div class="advice">' + items.map(function(t, i){
+      return '<div class="advice-item"><span class="advice-n">' + (i+1) + '</span><span>' + t + '</span></div>';
+    }).join('') + '</div>';
+  }
+  function report(opts){
+    var confCls = opts.confKind === 'need' ? 'need' : 'sure';
+    return '<div class="report">' +
+      '<div class="report-top"><h4>' + opts.title + '</h4>' +
+      '<span class="conf ' + confCls + '">' + opts.conf + '</span></div>' +
+      opts.sections.join('') +
+      '</div>';
+  }
+
+  // ── 场景 ────────────────────────────────────────────────
+  var SCENARIOS = [
+    {
+      keys: ['帮我删', '帮我改', '帮我停', '帮我清理', '直接改', '把它删', '删掉吧', '给我改', '删掉', '删了', '孤立'],
+      steps: [
+        { name:'找到你说的那 3 条', tool:'rule.list(group_uid IS NULL)', res:'3 条未挂载规则', ok:true },
+        { name:'核对写操作能力', tool:'写入口', res:'只读模式，不提供写操作', fail:true }
+      ],
+      build: function(){
+        return '<div class="banner neutral"><span class="bi">—</span><span><b>我不做写操作。</b>' +
+          '删除会直接影响线上发放，这一步必须由人确认。我只帮你把目标找准。</span></div>' +
+          report({
+            title:'可以帮你定位，不能帮你删', conf:'只读', confKind:'need',
+            sections:[
+              sec('你要动的应该是这 3 条',
+                evRow('', '测试123321', '未挂载 · 启用 · 额度 1 积分', '权益规则 →') +
+                evRow('', '123', '未挂载 · 启用 · 额度 1 积分', '权益规则 →') +
+                evRow('', 'DocHub 文库下载券', '未挂载 · 启用 · 看起来像正式配置', '权益规则 →')),
+              sec('为什么不由我来做', '<p>删除不是把一条数据藏起来：已关联的发放记录会失去对应批次，事后对账会断。' +
+                '<b>该不该删需要业务判断，我拿不到这个信息。</b></p>'),
+              sec('你可以这样处理', advice([
+                '先确认 3 条里哪些是测试数据——「DocHub 文库下载券」不像测试，删之前要问一下归属人。',
+                '到 <a href="#" onclick="return false">权益规则</a> 逐条操作；如果只是不想让它生效，用停用比删除稳妥。',
+                '需要的话我可以把这 3 条整理成清单，方便你贴进工单——但清单只是清单，我不会执行。'
+              ]))
+            ]
+          });
+      }
+    },
+
+    {
+      keys: ['核销', '消耗', '用了多少'],
+      steps: [
+        { name:'查看券批次', tool:'voucher.list()', res:'5 个批次，含发放配额', ok:true },
+        { name:'查找核销记录', tool:'redemption.query()', res:'管理台没有这类数据', fail:true }
+      ],
+      build: function(){
+        return '<div class="banner neutral"><span class="bi">—</span><span><b>这个问题我答不了。</b>' +
+          '管理台只有券的发放配额，没有核销流水。用发放量代替核销量会得到错误结论，所以我不给数字。</span></div>' +
+          report({
+            title:'缺核销流水，无法回答', conf:'信息不足', confKind:'need',
+            sections:[
+              sec('能确认的', '<p class="muted">5 个券批次的总配额与已发放数量是完整的，例如「双十一 20 元券」5000 张额度、已发放 1832 张。</p>'),
+              sec('缺什么', '<p>缺少券的<b>核销流水</b>（谁、什么时候、在哪一单用掉的）。想知道核销量，需要从交易侧的对账数据里取。</p>'),
+              sec('可以换个问法', '<p class="muted">「哪些批次发了但没人领」——这个只用发放数据就能回答。</p>')
+            ]
+          });
+      }
+    },
+
+    {
+      keys: ['没挂', '未挂', '挂到权益包', '孤儿', '没绑定权益包'],
+      steps: [
+        { name:'查看权益规则', tool:'rule.list()', res:'共 23 条规则', ok:true },
+        { name:'核对所属权益包', tool:'rule.group_uid 有效性检查', res:'发现 3 条未挂载', ok:true }
+      ],
+      build: function(){
+        return report({
+          title:'3 条权益规则没有归属权益包', conf:'可判定',
+          sections:[
+            sec('现象', '<p>有 3 条规则状态是「启用」，但没有挂到任何权益包上。它们不会随任何套餐发放给用户，等于配了没用。</p>'),
+            sec('证据',
+              evRow('', '测试123321', '所属权益包为空 · 状态 = 启用', '权益规则 →') +
+              evRow('', '123', '所属权益包为空 · 状态 = 启用', '权益规则 →') +
+              evRow('', 'DocHub 文库下载券', '所属权益包为空 · 状态 = 启用', '权益规则 →')),
+            sec('判断', '<p>这是<b>未挂载</b>，不是停用。停用的规则需要重新启用，未挂载的规则只需要挂回去——两者的处理方式完全不同。</p>'),
+            sec('建议', advice([
+              '其中 2 条看起来是测试数据（「测试123321」「123」），建议先确认是否可清理。',
+              '「DocHub 文库下载券」像是正式配置，建议到 <a href="#" onclick="return false">权益规则</a> 挂回对应权益包。'
+            ]))
+          ]
+        });
+      }
+    },
+
+    {
+      keys: ['测试数据', '脏数据', '测试的'],
+      steps: [
+        { name:'扫描商品域', tool:'spu.list() / sku.list()', res:'未发现', ok:true },
+        { name:'扫描权益域', tool:'tier.list() / rule.list()', res:'命中 4 条', ok:true },
+        { name:'扫描运营域', tool:'voucher.list()', res:'命中 1 条', ok:true },
+        { name:'扫描交易域', tool:'promo.list()', res:'命中 1 条', ok:true }
+      ],
+      build: function(){
+        return report({
+          title:'4 个位置有疑似测试数据', conf:'需人工确认', confKind:'need',
+          sections:[
+            sec('现象', '<p>按命名特征（测试 / 验收 / 勿投 / 纯数字）扫了一遍，命中 6 条。这是<b>特征匹配</b>，不是确凿结论，需要人工过一遍。</p>'),
+            sec('证据',
+              evRow('', '测试123321 · 123 · 1119wzz测试02', '权益规则，其中 2 条还没有归属权益包', '权益规则 →') +
+              evRow('', '测试批次-勿投', '券批次，草稿态，尚未投放过', '券批次 →') +
+              evRow('', '测试产品验收', '立减规则，优先级 5，排在生效规则里', '立减规则 →')),
+            sec('判断', '<p>权益域最集中。立减规则那条风险最高——它在正式表里且是启用状态，会影响真实优惠命中。</p>'),
+            sec('建议', advice([
+              '先处理 <a href="#" onclick="return false">立减规则</a> 里归属「测试产品验收」的那条。',
+              '券批次里的草稿可以直接清理，未发布过就没有副作用。'
+            ]))
+          ]
+        });
+      }
+    },
+
+    {
+      keys: ['券批次', '批次', '券'],
+      steps: [
+        { name:'查看券批次', tool:'voucher.list()', res:'5 个批次', ok:true },
+        { name:'核对发放进度', tool:'quota_total / quota_issued 比对', res:'3 个批次异常', ok:true },
+        { name:'核对批次状态', tool:'batch_state / lifecycle_state', res:'1 个已删除仍有发放', ok:true }
+      ],
+      build: function(){
+        return report({
+          title:'3 个批次的配置和实际状态对不上', conf:'可判定',
+          sections:[
+            sec('现象', '<p>3 个批次配好了但没在正常发放，原因各不相同，需要分开处理。</p>'),
+            sec('证据',
+              evRow('', '测试批次-勿投', '总配额 10 · 已发 0 · 草稿态，从未投放', '券批次 →') +
+              evRow('bad', '员工内购福利券', '300 / 300 已发完，但批次状态是已删除', '券批次 →') +
+              evRow('ok', '沉默用户召回券', '800 / 96 已发，只发出去 12%', '券批次 →')),
+            sec('判断', '<p>三条性质不同：第一条是没上线，第二条是删了还在发，第三条是发了没人领。<b>第二条风险最高</b>——删除的批次继续发券，后面没法对账。</p>'),
+            sec('建议', advice([
+              '先确认「员工内购福利券」为什么已删除还在发放，可能需要停掉投放位。',
+              '「沉默用户召回券」未发放可能是活动还没到时间，建议先看 <a href="#" onclick="return false">投放计划</a> 的时间窗。'
+            ]))
+          ]
+        });
+      }
+    },
+
+    {
+      keys: ['体检', '巡检', '盘点', '全站', '全面'],
+      steps: [
+        { name:'扫描商品域', tool:'bff.catalog.overview', res:'2 项待确认', ok:true },
+        { name:'扫描权益域', tool:'bff.benefit.overview', res:'5 项待确认', ok:true },
+        { name:'扫描交易域', tool:'bff.trade.overview', res:'3 项待确认', ok:true },
+        { name:'扫描渠道域', tool:'bff.channel.overview', res:'查询超时，已跳过', fail:true },
+        { name:'扫描运营域', tool:'bff.operation.overview', res:'3 项待确认', ok:true },
+        { name:'汇总并按影响排序', tool:'—', res:'完成', ok:true }
+      ],
+      build: function(){
+        return '<div class="banner"><span class="bi">!</span><span><b>有 1 个域没查到：渠道域。</b>' +
+          '下面的统计不包含渠道域，渠道相关问题需要单独查。</span></div>' +
+          report({
+            title:'全站 13 项配置问题，先处理这 3 条', conf:'需人工确认', confKind:'need',
+            sections:[
+              sec('现象', '<p>除渠道域外共 13 项待确认。数量不是重点，下面只展开<b>影响最大</b>的 3 条，其余给入口。</p>'),
+              sec('证据',
+                evRow('bad', '会员层级未上线', '超级会员下 2 个权益包挂在一个未上线的层级上，用户看不到', '会员层级 →') +
+                evRow('bad', '已删除批次仍在发放', '员工内购福利券 300 / 300 已发，批次状态是已删除', '券批次 →') +
+                evRow('', '3 条规则未挂载', '状态启用但不属于任何权益包，不会发放', '权益规则 →')),
+              sec('判断', '<p>前两条是「用户已经受影响」，第三条是「配了但没生效」。先修前两条。</p>'),
+              sec('建议', advice([
+                '按上面的顺序处理，每条都能在对应页面完成，助手不代改。',
+                '其余 10 项已按域归好类，可到 <a href="#" onclick="return false">权益规则</a> 逐域看。'
+              ]))
+            ]
+          });
+      }
+    },
+
+    {
+      keys: ['定价', '策略', '看不到', '前端看不到', '不展示'],
+      steps: [
+        { name:'查看定价策略', tool:'pricing.list(product="扫描王-pdf转换大师")', res:'找到 1 条', ok:true },
+        { name:'核对生效时间窗', tool:'effective_from / effective_to', res:'在有效期内', ok:true },
+        { name:'核对发布状态', tool:'publish_state', res:'未发布', ok:true }
+      ],
+      build: function(){
+        return report({
+          title:'在生效期内，但这条策略没有发布', conf:'可判定',
+          sections:[
+            sec('现象', '<p>「沉睡召回折扣」的生效时间是 11 月 1 日到 11 月 30 日，现在处于有效期内；但发布状态是<b>未发布</b>，所以前端不会露出。</p>'),
+            sec('证据',
+              evRow('', '沉睡召回折扣', '生效 2026-11-01 ~ 2026-11-30 · 状态 = 未发布', '定价策略 →') +
+              evRow('ok', '新客首月优惠（同产品对照）', '状态 = 已发布，正常露出', '定价策略 →')),
+            sec('判断', '<p>「生效时间」和「发布状态」是两个独立开关。时间到了不会自动发布，这是最容易漏的一步。</p>'),
+            sec('建议', advice([
+              '确认这条策略是否要上线。要上线就去 <a href="#" onclick="return false">定价策略</a> 发布。',
+              '如果只是提前配好，建议在活动开始前再检查一次。'
+            ]))
+          ]
+        });
+      }
+    },
+
+    {
+      keys: ['多少', '几条', '一共', '几个', '数量'],
+      steps: [
+        { name:'查看权益规则', tool:'rule.list(state=启用)', res:'共 23 条', ok:true },
+        { name:'顺带核对归属', tool:'rule.group_uid IS NULL', res:'3 条未挂载', ok:true }
+      ],
+      build: function(){
+        return '<div class="ans">' +
+          '<p class="ans-line"><b>23</b> 条权益规则处于启用状态。</p>' +
+          '<div class="ans-evs">' +
+            evRow('', '测试123321', '启用 · 未挂载 · 1 积分', '权益规则 →') +
+            evRow('', '123', '启用 · 未挂载 · 1 积分', '权益规则 →') +
+            evRow('', 'DocHub 文库下载券', '启用 · 未挂载 · 1 积分', '权益规则 →') +
+            evRow('', '浏览器售卖文库', '启用 · 已挂载 · 1 积分', '权益规则 →') +
+            evRow('', '1119wzz测试02', '启用 · 已挂载 · 周期 100 天', '权益规则 →') +
+          '</div>' +
+          '<p class="ans-foot">列前 5 条，共 23 条。数量按全站统计，不限当前页面筛选。</p>' +
+          '<div class="ans-more">其中 3 条没有挂到权益包——要看看影响吗？' +
+            '<button type="button" data-follow="有哪些权益规则没挂到权益包？">看看</button></div>' +
+        '</div>';
+      }
+    },
+
+    {
+      keys: ['权益', '生效', '超级会员', '没有权益'],
+      steps: [
+        { name:'查看会员层级', tool:'tier.list(product="超级会员")', res:'找到 3 个层级', ok:true },
+        { name:'查看权益包', tool:'group.list(product="超级会员")', res:'找到 2 个权益包', ok:true },
+        { name:'查看权益规则', tool:'rule.list()', res:'找到 18 条规则', ok:true },
+        { name:'检查挂载关系', tool:'tier → group → rule 关联核对', res:'4 项全部核对完成', ok:true }
+      ],
+      build: function(){
+        return report({
+          title:'权益没有生效，断在会员层级', conf:'可判定',
+          sections:[
+            sec('现象', '<p>超级会员下有 2 个权益包，但都没有挂到<b>已上线</b>的会员层级上。用户侧看不到任何权益。</p>'),
+            sec('证据',
+              evRow('', '高级会员', '上线状态 = 未上线 · 层级状态 = 启用', '会员层级 →') +
+              evRow('', '积分低频性能验收-1793886983990', '所属层级状态 = 未上线 · 权益包状态 = 启用', '权益包 →') +
+              evRow('ok', '18 条权益规则全部为启用', '规则本身没有问题，不是规则缺失', '权益规则 →')),
+            sec('判断', '<p>断点在会员层级的<b>上线状态</b>，不在规则。层级已启用但未上线，权益包挂在一个用户看不到的层级上。四串数据都查全了，结论可以确定。</p>'),
+            sec('建议', advice([
+              '确认「高级会员」是否应当上线。若应当，去 <a href="#" onclick="return false">会员层级</a> 打开上线。',
+              '另外发现 3 条规则没有归属权益包，它们不会随任何套餐发放，可在 <a href="#" onclick="return false">权益规则</a> 里处理。'
+            ]))
+          ]
+        });
+      }
+    }
+  ];
+
+  var FALLBACK = {
+    steps: [],
+    build: function(question){
+      return '<div class="banner neutral"><span class="bi">—</span><span><b>这个问题我没把握。</b>' +
+        '它不在我目前覆盖的范围里，硬答容易给出错结论，所以我先停在这儿。</span></div>' +
+        report({
+          title:'这个问题不在覆盖范围内', conf:'无法回答', confKind:'need',
+          sections:[
+            sec('我能回答的', '<p class="muted">管理台里的配置类问题：会员层级、权益包、权益规则、任务阈值、定价策略、券批次、推广位、立减规则、代扣模板、渠道归因、特性开关。</p>'),
+            sec('这个问题缺什么', '<p>「' + escapeHtml(question) + '」需要的数据不在管理台里，或者我还没学会怎么查它。</p>'),
+            sec('可以换个问法', '<p class="muted">试试「超级会员的权益为什么没生效」或「哪些券批次配了但没在发」。</p>')
+          ]
+        });
+    }
+  };
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  function match(text){
+    var q = text.toLowerCase();
+    for (var i = 0; i < SCENARIOS.length; i++){
+      var s = SCENARIOS[i];
+      for (var j = 0; j < s.keys.length; j++){
+        if (q.indexOf(s.keys[j].toLowerCase()) !== -1) return s;
+      }
+    }
+    return null;
+  }
+
+  // ── 渲染 ────────────────────────────────────────────────
+  function renderEmpty(){
+    stream.innerHTML = '';
+    var box = el('div', 'empty');
+    box.innerHTML =
+      '<h3>想知道哪块配置不对？</h3>' +
+      '<p>我会查管理台里已有的数据，给出带来源的结论。只读，不会改动任何配置。</p>' +
+      '<div class="sugg">' +
+        '<button type="button" data-q="超级会员这个产品的权益为什么没生效？">' +
+          '<span class="txt">超级会员这个产品的权益为什么没生效<span class="why">顺着层级 → 权益包 → 规则，指出断在哪一环</span></span><span class="go">→</span></button>' +
+        '<button type="button" data-q="有哪些权益规则没挂到权益包？">' +
+          '<span class="txt">有哪些权益规则没挂到权益包<span class="why">未挂载的规则不会随任何权益包发放</span></span><span class="go">→</span></button>' +
+        '<button type="button" data-q="现在有多少条启用的权益规则？">' +
+          '<span class="txt">现在有多少条启用的权益规则<span class="why">查询型：一个数字 + 清单，不出四段卡</span></span><span class="go">→</span></button>' +
+        '<button type="button" data-q="给我一份全站配置体检">' +
+          '<span class="txt">给我一份全站配置体检<span class="why">各域问题计数，只展开最该处理的 3 条</span></span><span class="go">→</span></button>' +
+        '<button type="button" data-q="上周券一共核销了多少张？">' +
+          '<span class="txt">上周券一共核销了多少张<span class="why">演示「查不到就说查不到」</span></span><span class="go">→</span></button>' +
+        '<button type="button" data-q="帮我把那 3 条孤立规则删掉">' +
+          '<span class="txt">帮我把那 3 条孤立规则删掉<span class="why">演示「不能做的不做」</span></span><span class="go">→</span></button>' +
+      '</div>';
+    stream.appendChild(box);
+    box.querySelectorAll('.sugg button').forEach(function(b){
+      b.addEventListener('click', function(){ ask2(b.getAttribute('data-q')); });
+    });
+    scrollBottom();
+  }
+
+  function appendUser(text){
+    if (stream.querySelector('.empty')) stream.innerHTML = '';
+    var row = el('div', 'user-row');
+    row.appendChild(el('div', 'user-msg', escapeHtml(text)));
+    stream.appendChild(row);
+    scrollBottom();
+  }
+
+  function newStepBlock(){
+    var block = el('div', 'steps');
+    stream.appendChild(block);
+    return block;
+  }
+
+  function addStep(block, name, tool){
+    var step = el('div', 'step');
+    step.innerHTML =
+      '<span class="dot run"></span>' +
+      '<div class="step-body">' +
+        '<div class="step-line"><span class="step-name">' + escapeHtml(name) + '</span>' +
+        '<span class="step-res">正在查…</span></div>' +
+        (tool && tool !== '—' ? '<div class="toolchip">' + escapeHtml(tool) + '</div>' : '') +
+      '</div>';
+    block.appendChild(step);
+    scrollBottom();
+    return step;
+  }
+
+  function finishStep(step, text, cls){
+    var dot = step.querySelector('.dot');
+    var res = step.querySelector('.step-res');
+    dot.className = 'dot ' + cls;
+    dot.textContent = cls === 'fail' ? '!' : '✓';
+    res.className = 'step-res ' + cls;
+    res.textContent = text;
+    scrollBottom();
+  }
+
+  async function run(text){
+    if (running) return;
+    appendUser(text);
+    setMode('running');
+    aborted = false;
+
+    await wait(220);
+    var sc = match(text);
+    var steps = sc ? sc.steps : [];
+    var block = null;
+    var failed = 0;
+
+    if (steps.length){
+      block = newStepBlock();
+      for (var i = 0; i < steps.length; i++){
+        if (aborted) break;
+        var st = steps[i];
+        var node = addStep(block, st.name, st.tool);
+        await wait(650 + Math.random() * 500);
+        if (aborted){ finishStep(node, '已停止', 'fail'); break; }
+        if (st.fail){
+          failed++;
+          finishStep(node, st.res || '查询失败，已跳过', 'fail');
+        } else {
+          finishStep(node, st.res, 'done');
+        }
+        await wait(140);
+      }
+    }
+
+    if (aborted){
+      var stopRow = el('div', 'banner neutral');
+      stopRow.innerHTML = '<span class="bi">—</span><span>已停止。已经查到的结果没有保留，重新问一次会从头查。</span>';
+      stream.appendChild(stopRow);
+      setMode('send');
+      aborted = false;
+      scrollBottom();
+      return;
+    }
+
+    await wait(360);
+
+    var card = el('div', 'report-wrap');
+    card.innerHTML = sc ? sc.build() : FALLBACK.build(text);
+    stream.appendChild(card);
+
+    // 查询型回答尾部的「要不要进一步看」
+    card.querySelectorAll('[data-follow]').forEach(function(b){
+      b.addEventListener('click', function(){ ask2(b.getAttribute('data-follow')); });
+    });
+
+    if (failed > 0 && sc){
+      // 部分失败时在卡片顶部补一条说明，避免用户以为查全了
+      var firstReport = card.querySelector('.report');
+      if (firstReport && !card.querySelector('.banner')){
+        var b = el('div', 'banner');
+        b.innerHTML = '<span class="bi">!</span><span><b>有 ' + failed + ' 项没查到。</b>下面结论只覆盖成功的那部分。</span>';
+        card.insertBefore(b, firstReport);
+      }
+    }
+
+    // 反馈
+    var fb = el('div', 'feedback', '<span>这个回答有用吗？</span>' +
+      '<button type="button" data-fb="up" aria-pressed="false">有用</button>' +
+      '<button type="button" data-fb="down" aria-pressed="false">没用</button>');
+    card.appendChild(fb);
+    fb.addEventListener('click', function(e){
+      var btn = e.target.closest('button');
+      if (!btn) return;
+      var on = btn.getAttribute('aria-pressed') === 'true';
+      fb.querySelectorAll('button').forEach(function(o){ o.setAttribute('aria-pressed','false'); });
+      btn.setAttribute('aria-pressed', String(!on));
+      var tip = fb.querySelector('.done');
+      if (tip) tip.remove();
+      if (!on){
+        var t = el('span', 'done', '已记录');
+        fb.appendChild(t);
+      }
+    });
+
+    setMode('send');
+    scrollBottom();
+  }
+
+  // ── 交互 ────────────────────────────────────────────────
+  function ask2(text){
+    text = (text || '').trim();
+    if (!text || running) return;
+    ask.value = '';
+    autosize();
+    send.disabled = true;
+    run(text);
+  }
+
+  function autosize(){
+    ask.style.height = 'auto';
+    ask.style.height = Math.min(ask.scrollHeight, 96) + 'px';
+  }
+
+  ask.addEventListener('input', function(){
+    autosize();
+    if (!running) send.disabled = ask.value.trim() === '';
+  });
+
+  ask.addEventListener('keydown', function(e){
+    if (e.key === 'Enter' && !e.shiftKey){
+      e.preventDefault();
+      if (running){ return; }
+      ask2(ask.value);
+    }
+  });
+
+  send.addEventListener('click', function(){
+    if (running){
+      aborted = true;
+      send.disabled = true;
+      return;
+    }
+    ask2(ask.value);
+  });
+
+  document.querySelectorAll('.ctx-x').forEach(function(x){
+    x.addEventListener('click', function(){
+      ctxbar.hidden = true;
+    });
+  });
+
+  // 未唤起 → 已唤起：入口按钮和抽屉互斥，对话内容保留
+  function openDrawer(){
+    drawer.hidden = false;
+    fab.hidden = true;
+    scrollBottom();
+    ask.focus();
+  }
+  function closeDrawer(){
+    drawer.hidden = true;
+    fab.hidden = false;
+    fab.focus();
+  }
+
+  fab.addEventListener('click', openDrawer);
+  document.getElementById('closeIcon').addEventListener('click', closeDrawer);
+
+  function reset(){
+    if (running){ aborted = true; }
+    firstRun = true;
+    running = false;
+    ask.value = '';
+    autosize();
+    setMode('send');
+    ctxbar.hidden = false;
+    renderEmpty();
+    ask.focus();
+  }
+  document.getElementById('resetBtn').addEventListener('click', reset);
+  document.getElementById('resetIcon').addEventListener('click', reset);
+
+  // 初始
+  renderEmpty();
+  setMode('send');
+})();
+</script>

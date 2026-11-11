@@ -135,6 +135,46 @@ var AuthFailTotal = prometheus.NewCounterVec(
 	[]string{"route"},
 )
 
+// ── 诊断规则指标 ───────────────────────────────────────────
+//
+// 这三个指标回答的是「体检到底查了什么、查成了没有」。
+// 只看 HTTP 200 是看不出区别的：规则超时、规则返回
+// inconclusive、规则判断有误，对外都是同一个 200。
+
+// CheckTotal 每条规则的执行次数，按结论切分。
+//
+// verdict 取值除 ok / issue / inconclusive 外还有 error（查询本身失败）。
+// issue 占比突然升高只有两种解释：线上真出事了，或者规则写错了——
+// 两者都该立刻被人看到，所以结论必须进 label 而不是只进日志。
+var CheckTotal = prometheus.NewCounterVec(
+	prometheus.CounterOpts{Namespace: "mc", Subsystem: "diag", Name: "check_total", Help: "诊断规则执行次数，按 规则/结论 切分"},
+	[]string{"check", "verdict"},
+)
+
+// CheckDuration 单条规则的耗时。
+//
+// 分桶上限取到 6 秒，因为规则的 TimeoutMS 多在 1~6 秒；
+// 落在这个区间的样本就是在告诉人「这条规则正贴着超时线跑」。
+// 一条慢规则会直接吃掉 agent 45 秒的总预算，比它自己超时更值得警惕。
+var CheckDuration = prometheus.NewHistogramVec(
+	prometheus.HistogramOpts{
+		Namespace: "mc", Subsystem: "diag", Name: "check_duration_seconds",
+		Help:    "单条诊断规则耗时",
+		Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 6},
+	},
+	[]string{"check"},
+)
+
+// CoverageMissingTotal 因数据缺失而查不全的次数。
+//
+// verdict=inconclusive 只说明「这个结论不可信」，看不出缺的是哪类数据。
+// 这个计数器按规则切分，才能回答「是某个业务域的数据源一直有问题，
+// 还是所有规则都在缺同一张表」。
+var CoverageMissingTotal = prometheus.NewCounterVec(
+	prometheus.CounterOpts{Namespace: "mc", Subsystem: "diag", Name: "coverage_missing_total", Help: "因数据缺失而无法下结论的次数"},
+	[]string{"check"},
+)
+
 // ── 前端上报指标 ───────────────────────────────────────────
 //
 // 前端通过网关上报（不直连 Prometheus），网关把事件转成计数器。
@@ -336,6 +376,7 @@ func init() {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		RequestTotal, RequestDuration, InFlight, RateLimitedTotal, AuthFailTotal,
+		CheckTotal, CheckDuration, CoverageMissingTotal,
 		CacheHits, CacheMisses, SingleflightCollapsed, FanoutDuration, FanoutBlocks, DegradedTotal,
 		FrontendEvents, FrontendVital,
 		LockAcquire, LockHoldDuration, LockLost, IdempotencyOutcome,

@@ -28,6 +28,15 @@ scrape_configs:
         labels:
           service: host
 
+  # agent 的 /metrics 同样只挂在 observ 网段：nginx 只转发 /api/agent/ 前缀，
+  # /metrics 不在其列，公网摸不到。
+  - job_name: agent
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["agent:3001"]
+        labels:
+          service: agent
+
   # Prometheus 自身（可选，用来发现「采集本身出问题了」）
   - job_name: prometheus
     static_configs:

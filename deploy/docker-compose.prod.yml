@@ -128,6 +128,66 @@ services:
     networks: [edge, data, observ]
     logging: *default-logging
 
+  # ── 运营诊断助手 agent ──
+  #
+  # 它和 gateway 是**可降级**关系：agent 挂了只是右下角的诊断入口不可用，
+  # 管理台其余部分照常。所以 nginx 不 depends_on 它——
+  # 把一个实验性功能加进启动依赖链，等于让它的故障升级成全站起不来。
+  #
+  # 只挂 edge：往外要调模型 API（edge 有出口），往内要调 gateway:8080。
+  # 不挂 data —— 它不需要碰 MySQL/Redis，多挂一个网段只是多一条横向移动路径。
+  #
+  # 另外挂 observ，**只为让 Prometheus 抓到 /metrics**：nginx 只转发
+  # /api/agent/ 前缀，/metrics 不在其中，所以它在 edge 上是不可达的。
+  # 这一条和 gateway 的 observ 网段性质不同（那个是躲公网，这个是单向被抓）。
+  agent:
+    build:
+      context: ..
+      dockerfile: agent/Dockerfile
+    restart: unless-stopped
+    environment:
+      ENV: prod
+      AGENT_PORT: "3001"
+      # 上线默认关。链路先打通、看 /healthz 正常之后再由运维改成 1。
+      # 关着的时候进程照样起得来（config.ts 对关掉的实例不校验报价和 baseUrl）。
+      AGENT_ENABLED: ${AGENT_ENABLED:-0}
+      AGENT_BACKEND_URL: "http://gateway:8080"
+      # 模型接入点与密钥只能由部署环境注入，绝不进镜像/仓库
+      AGENT_BASE_URL: ${AGENT_BASE_URL:-}
+      AGENT_API_KEY: ${AGENT_API_KEY:-}
+      AGENT_MODEL: ${AGENT_MODEL:-M1}
+      AGENT_MODEL_FALLBACK: ${AGENT_MODEL_FALLBACK:-M11}
+      # 报价是金额闸门的唯一依据，按「元 / 百万 token」填真实采购价。
+      # 留 0 时如果 enabled=1，进程会在启动自检直接退出——
+      # 这是故意的：闸门靠这个数，缺了它等于没有预算控制。
+      AGENT_PRICE_IN: ${AGENT_PRICE_IN:-0}
+      AGENT_PRICE_OUT: ${AGENT_PRICE_OUT:-0}
+      AGENT_PRICE_CACHE_READ: ${AGENT_PRICE_CACHE_READ:-}
+      # 灰度期给死额度，先看真实成本再往上调
+      AGENT_DAILY_BUDGET_CNY: ${AGENT_DAILY_BUDGET_CNY:-300}
+      AGENT_MAX_INFLIGHT: "8"
+      AGENT_USER_RPM: "5"
+      AGENT_MAX_TURNS: "10"
+      AGENT_TIMEOUT_TOTAL_MS: "45000"
+      AGENT_TIMEOUT_TOOL_MS: "8000"
+      AGENT_TOGGLE_TTL_SEC: "60"
+      # 一行一次的调用记录。**不落问题原文、不落模型输出**，
+      # 只记耗时/成本/工具失败数，用来回答「这东西到底值不值这个钱」。
+      AGENT_TRACE_FILE: "/var/log/agent/traces.jsonl"
+    volumes:
+      - agent-trace:/var/log/agent
+    expose:
+      - "3001"
+    healthcheck:
+      # 运行镜像里没有 curl，用 node 自带的 fetch 探活。
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks: [edge, observ]
+    logging: *default-logging
+
   # ── 消息队列与对象存储 ──
   #
   # 全部只挂 data 网段（internal: true），不对公网 publish 端口。
@@ -349,3 +409,4 @@ volumes:
   minio-data:
   prometheus-data:
   grafana-data:
+  agent-trace:

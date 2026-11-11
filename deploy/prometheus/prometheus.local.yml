@@ -6,7 +6,7 @@
 #
 # 告警规则**照常加载**。历史上这里曾以「规则依赖 node_* 主机指标、
 # Windows 上的 node-exporter 量到的是 Docker Desktop 的 VM」为由关掉了 rules，
-# 但 alerts.yml 里 14 条规则全部只基于网关自己的 mc_* 指标，
+# 但 alerts.yml 里 19 条规则全部只基于网关和 agent 自己的指标，
 # 没有任何 node_* 依赖 —— 关掉它等于让所有告警从未被验证过。
 
 global:
@@ -24,6 +24,16 @@ scrape_configs:
       - targets: ["host.docker.internal:8080"]
         labels:
           service: gateway
+          env: local
+
+  # agent 同样跑在宿主机（node --import tsx src/server.ts）。
+  # 和 gateway 一样从宿主机网卡抓，不走容器网络 —— 本地没有 observ 网段。
+  - job_name: agent
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:3001"]
+        labels:
+          service: agent
           env: local
 
   # Prometheus 自身，用来确认采集本身没挂
