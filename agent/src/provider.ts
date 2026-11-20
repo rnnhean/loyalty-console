@@ -85,9 +85,16 @@ const ZERO_USAGE: Usage = { inTokens: 0, outTokens: 0, cacheHitTokens: 0 };
 export function createHttpProvider(opts: HttpProviderOptions): Provider {
     const doFetch = opts.fetchImpl ?? fetch;
 
+    // 档位代号 → 上游真实模型名。白名单（M1/M2/M7/M8）是业务侧的抽象占位，
+    // 换供应商时只调这张表、不动业务代码。从 env 读 AGENT_MODEL_ALIAS_<代号>。
+    // 没配别名时按原样下发（部分转售网关直接认 M1 这类代号）。
+    function resolveModel(code: string): string {
+        return process.env[`AGENT_MODEL_ALIAS_${code}`] || code;
+    }
+
     async function once(req: CompleteRequest, model: string): Promise<CompleteResponse> {
         const body: Record<string, unknown> = {
-            model,
+            model: resolveModel(model),
             messages: toOpenAIMessages(req.messages),
             stream: false,
         };
