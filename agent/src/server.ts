@@ -22,6 +22,7 @@ import { createToolExecutor } from './tools.js';
 import { Guard } from './guard.js';
 import { runAgent } from './loop.js';
 import type { CheckInfo } from './prompt.js';
+import { attachHeartbeat } from './sse.js';
 import { hashUser, newTraceId, Tracer } from './trace.js';
 import { renderMetrics } from './metrics.js';
 import {
@@ -35,7 +36,9 @@ import {
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_QUESTION_CHARS = 500;
-const PING_INTERVAL_MS = 15_000;
+// 心跳间隔可注入：测试里要把 15s 压到几十毫秒才能验证「真的会发」，
+// 生产默认仍是 15s。压到 0 或负数视为关闭（演练/单测里不需要心跳时）。
+const PING_INTERVAL_MS = Number(process.env.AGENT_PING_INTERVAL_MS ?? 15_000);
 const CHECKS_TTL_MS = 5 * 60_000;
 
 const cfg = loadConfig();
@@ -174,12 +177,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         DeniedTotal.inc({ reason: decision.reason });
         RequestTotal.inc({ result: 'denied' });
         // 准入拒绝也用 SSE 回，前端不用为「状态码 429」单独写一套
-        startSSE(res, traceId);
+        const stopDenyPing = startSSE(res, traceId);
         writeEvent(res, {
             type: 'error',
             reason: mapDeny(decision.reason),
             message: decision.detail,
         });
+        stopDenyPing();
         res.end();
         tracer.write({
             trace_id: traceId,
@@ -210,10 +214,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     // 客户端关页面 / 刷新时立刻停模型调用，别继续计费
     req.on('close', onClose);
 
-    startSSE(res, traceId);
-    const ping = setInterval(() => {
-        if (!res.writableEnded) res.write(': ping\n\n');
-    }, PING_INTERVAL_MS);
+    // 心跳统一由 startSSE 维护（含拒绝路径），这里只拿清理函数
+    const stopPing = startSSE(res, traceId);
 
     let toolFailures = 0;
     let errorReason: ErrorReason | undefined;
@@ -284,7 +286,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
             });
         }
     } finally {
-        clearInterval(ping);
+        stopPing();
         lease.release();
         req.off('close', onClose);
         if (!res.writableEnded) res.end();
@@ -408,7 +410,21 @@ function sendText(res: ServerResponse, status: number, body: string): void {
     res.end(body);
 }
 
-function startSSE(res: ServerResponse, traceId: string): void {
+/**
+ * 开 SSE 并挂心跳，返回清理函数。
+ *
+ * 为什么必须有心跳（线上踩过的坑）：中间代理（nginx / 负载均衡 / CDN）对
+ * 「长时间没有任何字节」的连接有空闲超时（nginx 默认 60s）。模型思考一次
+ * 可能几十秒，期间一个字节都不发，代理会把连接掐掉——表现是「偶尔聊到一半
+ * 就断，重试又好了」。
+ *
+ * 心跳用 SSE 的**注释行**（以 `:` 开头）：客户端解析器会忽略它，不会当成
+ * 消息，但对每个中间代理来说都是「连接还活着」的证据。间隔 15s，远小于最
+ * 常见的 60s 空闲超时。
+ *
+ * 必须返回清理函数：定时器不清，每个断开的请求就留一个定时器 → 内存泄漏。
+ */
+function startSSE(res: ServerResponse, traceId: string): () => void {
     res.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
         'cache-control': 'no-cache, no-transform',
@@ -418,6 +434,9 @@ function startSSE(res: ServerResponse, traceId: string): void {
     });
     // 立刻写一行，让前端 fetch 的 reader 马上拿到首个 chunk
     res.write(': connected\n\n');
+
+    // 心跳抽在 sse.ts：那里可单测，且间隔 <=0 时自动关闭
+    return attachHeartbeat(res, PING_INTERVAL_MS);
 }
 
 function writeEvent(res: ServerResponse, e: AgentEvent): void {
