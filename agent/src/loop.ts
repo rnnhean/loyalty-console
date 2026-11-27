@@ -632,12 +632,19 @@ function checkedNames(call: ToolCall): string[] {
 
 function labelOf(call: ToolCall): string {
     const args = parseJson(call.arguments) as
-        | { name?: string; checks?: unknown[]; entity?: string }
+        | { name?: string; checks?: unknown[]; entity?: string; rule_id?: number }
         | undefined;
     if (call.name === 'run_check' && args?.name) return `检查「${args.name}」`;
     if (call.name === 'run_checks') return `体检 ${args?.checks?.length ?? 0} 项`;
     if (call.name === 'search_records') return `查询 ${args?.entity ?? ''}`;
     if (call.name === 'pick_product') return '匹配产品名';
+    // 规则工具：用户在抽屉里看到的是「解释规则 #7」而不是 explain_rule，
+    // 否则步骤列表会中英混杂，不像一个成品。
+    if (call.name === 'list_rules') return '列出可配置规则';
+    if (call.name === 'explain_rule') {
+        return args?.rule_id ? `解释规则 #${args.rule_id}` : '解释规则';
+    }
+    if (call.name === 'simulate_rules') return '试跑全部规则';
     return call.name;
 }
 

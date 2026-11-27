@@ -14,9 +14,21 @@ import (
 // 返回 error 表示失败，runner 会记进历史并保留下次重试的机会（等下一个 cron 点）。
 type Command func(ctx context.Context) (string, error)
 
+// JobRepo 是 runner 对存储的最小依赖。
+//
+// 抽成接口不是为了「面向接口编程」的教条，而是因为并发策略
+// （skip / queue / allow）这类时序逻辑必须能脱离 MySQL 单测——
+// 用真实库测「上一次没跑完时第二次怎么办」既慢又难构造。
+type JobRepo interface {
+	Due(ctx context.Context, now time.Time) ([]Job, error)
+	Get(ctx context.Context, id int64) (Job, error)
+	MarkRun(ctx context.Context, id int64, status, errMsg string, next time.Time) error
+	RecordRun(ctx context.Context, jobID int64, status string, durMS int64, errMsg string) error
+}
+
 // Runner 调度循环。
 type Runner struct {
-	Store     *Store
+	Store     JobRepo
 	Locker    Locker
 	Tick      time.Duration
 	Log       *slog.Logger
@@ -38,7 +50,7 @@ type Locker interface {
 type ReleaseFunc interface{ Release(ctx context.Context) error }
 
 // NewRunner 构造。
-func NewRunner(store *Store, locker Locker, log *slog.Logger) *Runner {
+func NewRunner(store JobRepo, locker Locker, log *slog.Logger) *Runner {
 	if log == nil {
 		log = slog.Default()
 	}

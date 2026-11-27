@@ -160,6 +160,37 @@ async function login() {
     });
     check('非法 cron 返回 400', badCron.status === 400, badCron.text.slice(0, 100));
 
+    console.log('\n=== 8b. 作业的改 / 删 / 其余命令 ===');
+    // 这三条此前从没被调用过：接口写了，但只测了「建」和「跑」。
+    const madeJob = await api('/api/jobs', {
+        method: 'POST',
+        body: { name: `e2e 作业 ${Date.now()}`, cron: '*/7 * * * *', command: 'purge_mask_audit', concurrency: 'skip', timeout_sec: 30, enabled: true },
+    });
+    check('新建作业', madeJob.status === 200, madeJob.text.slice(0, 80));
+    const madeJobId = madeJob.json?.id;
+
+    const putJob = await api(`/api/jobs/${madeJobId}`, {
+        method: 'PUT',
+        body: { name: `e2e 作业改名 ${Date.now()}`, cron: '*/9 * * * *', command: 'purge_mask_audit', concurrency: 'queue', timeout_sec: 60, enabled: true },
+    });
+    check('修改作业', putJob.status === 200, putJob.text.slice(0, 80));
+    const jobAfter = await api('/api/jobs');
+    const updated = (jobAfter.json?.items ?? []).find((j) => j.id === madeJobId);
+    check('cron 已更新', updated?.cron === '*/9 * * * *', updated?.cron);
+    check('并发策略已更新', updated?.concurrency === 'queue', updated?.concurrency);
+
+    // purge_mask_audit 这个命令注册了但从没执行过
+    const purgeRun = await api(`/api/jobs/${madeJobId}/run`, { method: 'POST' });
+    check('purge_mask_audit 可执行', purgeRun.status === 200 && /审计/.test(purgeRun.json?.output ?? ''), purgeRun.json?.output);
+    check('修改非法 cron 被拒', (await api(`/api/jobs/${madeJobId}`, {
+        method: 'PUT',
+        body: { name: 'x', cron: 'bad', command: 'purge_mask_audit' },
+    })).status === 400);
+
+    const delJob = await api(`/api/jobs/${madeJobId}`, { method: 'DELETE' });
+    check('删除作业', delJob.status === 200, delJob.text.slice(0, 80));
+    check('删除后再删返回 404', (await api(`/api/jobs/${madeJobId}`, { method: 'DELETE' })).status === 404);
+
     // ── 脱敏 ──
     console.log('\n=== 9. 脱敏策略 ===');
     const pol = await api('/api/mask-policies');

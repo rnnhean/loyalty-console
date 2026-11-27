@@ -1400,9 +1400,10 @@ cd server && ./bin/mc-gateway.exe
 cd web && npx vite --port 5181
 
 # 端到端（需要 MC_ADMIN_PASS）
-node scripts/test-ops-e2e.mjs      # 36 项：规则/作业/脱敏 + 远端识别 + 降级
+node scripts/test-ops-e2e.mjs      # 44 项：规则/作业 CRUD/脱敏 + 远端识别 + 降级
 node scripts/test-agent-rules.mjs  # 真实大模型：explain_rule / simulate_rules
-node scripts/test-ops-ui.mjs       # 有头浏览器：三个页面的交互
+node scripts/test-ops-ui.mjs       # 有头浏览器：三个页面的只读交互（13 项）
+node scripts/test-ops-ui-crud.mjs  # 有头浏览器：三个页面的新建/编辑/删除（12 项）
 ```
 
 ### 指标
@@ -1421,3 +1422,10 @@ node scripts/test-ops-ui.mjs       # 有头浏览器：三个页面的交互
 > 自定义指标里再用同名标签会被覆盖（实测面板上全变成 `gateway`）。
 
 看板：<http://127.0.0.1:13000/d/mc-ops-config>
+
+### 已知问题
+
+| 问题 | 影响 | 现状 |
+|---|---|---|
+| 模型会重复调用同一个工具 | 实测同一问题里 `explain_rule` 被调 3 次，单次问答成本从 0.045 元涨到 0.09 元 | 结论正确但浪费。现有判重只拦「参数完全相同」，模型微调 `data` 就能绕过。计划：同工具调用次数硬上限 + 提示词明确「结果已足够时直接给结论」 |
+| 网关缺 DB 重连 | Docker/WSL 重启后 `driver: bad connection`，网关启动直接失败 | 重启 Docker Desktop 可恢复。根治需要连接池健康检查（`SetConnMaxLifetime` 已有，但启动时 ping 失败仍需重试） |

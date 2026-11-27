@@ -84,8 +84,9 @@ async function diagnose(token, question) {
         '会命中吗？请用 explain_rule 解释是哪一步不满足，并给出该步的实际值和期望值。';
     const r1 = await diagnose(token, q1);
     console.log('  工具链:', r1.steps.join(' → ') || '(未调工具)');
-    check('调用了 list_rules 或 explain_rule', r1.steps.some((s) => /list_rules|explain_rule/.test(s)));
-    check('调用了 explain_rule', r1.steps.some((s) => s === 'explain_rule'));
+    // 步骤标签是给人看的中文，不能只认英文工具名（改了 labelOf 之后这里会假失败）
+    check('调用了规则工具', r1.steps.some((s) => /列出可配置规则|解释规则|list_rules|explain_rule/.test(s)), r1.steps.join(' → '));
+    check('调用了 explain_rule', r1.steps.some((s) => /解释规则|explain_rule/.test(s)));
     check('产出最终结论', Boolean(r1.final));
     const body1 = r1.final
         ? JSON.stringify(r1.final.report)
@@ -102,7 +103,7 @@ async function diagnose(token, question) {
     const q2 = '用样例数据把所有启用的规则试跑一遍，告诉我哪些会命中。';
     const r2 = await diagnose(token, q2);
     console.log('  工具链:', r2.steps.join(' → ') || '(未调工具)');
-    check('调用了 simulate_rules', r2.steps.some((s) => s === 'simulate_rules'));
+    check('调用了 simulate_rules', r2.steps.some((s) => /试跑全部规则|simulate_rules/.test(s)), r2.steps.join(' → '));
     check('产出最终结论', Boolean(r2.final));
     const body2 = r2.final ? JSON.stringify(r2.final.report) : '';
     console.log('  结论:', r2.final?.report?.title);
