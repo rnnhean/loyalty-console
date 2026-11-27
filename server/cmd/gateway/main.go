@@ -60,7 +60,9 @@ func run() error {
 		return err
 	}
 
-	logger := observ.NewLogger(env("MC_LOG_LEVEL", "info"))
+	// 带上 service：所有走这个 logger 的日志都会自动带服务标识，
+	// 否则 Kafka 消费、中间件降级这类日志会落进 ES 的 logs-unknown。
+	logger := observ.NewLogger(env("MC_LOG_LEVEL", "info")).With("service", "gateway")
 	gateway.Logger = logger
 	slog.SetDefault(logger)
 
@@ -205,7 +207,11 @@ func run() error {
 
 	// ── 路由 ──
 	r := gin.New()
-	r.Use(gateway.Trace(), gateway.Recover(), gateway.Metrics(),
+	// Trace 必须最外层（后面所有日志才带 trace_id）；
+	// AccessLog 紧跟其后，这样日志里既有 trace_id 又能拿到最终 status。
+	// 注意顺序：gin 的中间件是「先注册先执行」，AccessLog 在 c.Next() 之后
+	// 记录时，内层的 Metrics / CORS / handler 都已经跑完，状态是最终的。
+	r.Use(gateway.Trace(), gateway.AccessLog(logger), gateway.Recover(), gateway.Metrics(),
 		gateway.CORS(envList("MC_CORS_ORIGINS",
 			"http://localhost:5173,http://127.0.0.1:5173")))
 	gateway.Mount(r)

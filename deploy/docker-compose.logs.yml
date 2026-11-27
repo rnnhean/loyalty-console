@@ -1,0 +1,107 @@
+# 日志栈：ES + Kibana + Filebeat。
+#
+# 为什么不复用 knowledge-hub 的 ES：
+#   那个 ES 存的是文档向量（kh_chunk 索引，dense_vector 字段），
+#   日志是「高写入、按时间滚动删除」的负载，两类数据混在一个集群里，
+#   日志的写入压力会拖慢向量检索，ILM 也会把两类索引的管理搅在一起。
+#   拆开之后，日志集群可以随时清空重建，不影响业务数据。
+#
+# 端口避开 knowledge-hub 的 9200/5601：这台机器上可能同时跑两套。
+#
+# 资源：ES heap 固定 512m（不设的话默认 1G），Kibana ~700m，Filebeat ~100m，
+# 合计约 1.4G —— .wslconfig 限 6G，和业务容器一起跑得下。
+
+name: mc-logs
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  es-logs:
+    # 复用本地已有的 elasticsearch:8.17.0（knowledge-hub 那套构建出来的，带 IK 分词）。
+    # 为什么不拉官方 docker.elastic.co/elasticsearch/...：
+    #   那个镜像 487MB，下到一半断了（unexpected EOF），而本地这个同版本镜像
+    #   功能完全够用——日志采集用不到中文分词，多一个 IK 插件无害。
+    # 结果仍是独立集群：独立容器、独立数据卷、独立端口，和业务 ES 互不影响。
+    image: elasticsearch:8.17.0
+    container_name: mc-es-logs
+    logging: *default-logging
+    environment:
+      - node.name=es-logs
+      - discovery.type=single-node
+      # 本地单节点，关掉安全认证：开 TLS 只会让 Filebeat/Kibana 的配置
+      # 多三处证书路径，而这个集群只监听宿主机，不对外。
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      # 固定堆大小：ES 官方要求 -Xms 与 -Xmx 相等，
+      # 否则堆会动态伸缩，反复 GC 抖动，日志写入时延会很难看。
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      # 单节点不需要副本，少一份磁盘写入
+      - number_of_replicas=0
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - mc-es-logs-data:/usr/share/elasticsearch/data
+    ports:
+      - "9201:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+
+  kibana-logs:
+    # 同样复用本地镜像，不重新下载
+    image: kibana:8.17.0
+    container_name: mc-kibana-logs
+    logging: *default-logging
+    environment:
+      - ELASTICSEARCH_HOSTS=http://es-logs:9200
+      - SERVER_PORT=5601
+    ports:
+      - "5602:5601"
+    depends_on:
+      es-logs:
+        condition: service_healthy
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.17.0
+    container_name: mc-filebeat
+    logging: *default-logging
+    # 读 Docker 的容器日志目录（json-file 驱动写在这里）。
+    # 只读挂载：Filebeat 绝不该改宿主机上的日志文件。
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      # 索引模板：显式声明字段类型，不让 ES 自动推断
+      - ./filebeat/template:/usr/share/filebeat/template:ro
+      # 两个项目的应用日志目录（只读）。
+      # 业务服务是宿主机裸进程，日志写在文件里，Docker 看不到，
+      # 只能通过挂载让 Filebeat 读。
+      - ./logs:/logs:ro
+      - ../../knowledge-hub-backend/logs:/logs-kh:ro
+      # 记录读取位点，重启后从断点继续，不会重复发送也不会漏
+      - mc-filebeat-data:/usr/share/filebeat/data
+    # Filebeat 以 root 跑才能读 /var/lib/docker/containers（目录权限 0700）
+    user: root
+    # 必须显式覆盖 command。
+    # 这个镜像自带的 CMD 是 `-environment container`（给 setup 子命令用的），
+    # 直接继承会被解析成 `filebeat -environment container`，
+    # 报 `unknown command "container"` 后立刻退出。
+    #
+    # --strict.perms=false：挂载进来的 filebeat.yml 权限是 644，
+    # Filebeat 默认要求配置文件必须是 600（防他人篡改），否则拒绝启动。
+    command: ["filebeat", "-e", "--strict.perms=false"]
+    depends_on:
+      es-logs:
+        condition: service_healthy
+
+volumes:
+  mc-es-logs-data:
+  mc-filebeat-data:

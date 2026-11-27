@@ -1,0 +1,63 @@
+{
+  "index_patterns": ["logs-*"],
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "refresh_interval": "5s",
+      "index.lifecycle.name": null
+    },
+    "mappings": {
+      "dynamic": true,
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "ts": { "type": "date" },
+        "service": { "type": "keyword" },
+        "env": { "type": "keyword" },
+        "version": { "type": "keyword" },
+        "level": { "type": "keyword" },
+        "pipeline": { "type": "keyword" },
+
+        "trace_id": { "type": "keyword" },
+        "msg": { "type": "text", "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } } },
+
+        "remote_addr": { "type": "ip" },
+        "method": { "type": "keyword" },
+        "path": { "type": "keyword" },
+        "status": { "type": "integer" },
+        "body_bytes": { "type": "long" },
+        "request_time": { "type": "float" },
+        "upstream_time": { "type": "keyword" },
+        "ua": { "type": "text" },
+
+        "container": {
+          "properties": {
+            "name": { "type": "keyword" },
+            "image": {
+              "properties": {
+                "name": { "type": "keyword" }
+              }
+            }
+          }
+        },
+        "docker": {
+          "properties": {
+            "container": {
+              "properties": {
+                "labels": {
+                  "properties": {
+                    "com_docker_compose_service": { "type": "keyword" },
+                    "collect_logs": { "type": "keyword" },
+                    "service": { "type": "keyword" },
+                    "env": { "type": "keyword" },
+                    "version": { "type": "keyword" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

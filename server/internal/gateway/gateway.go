@@ -76,6 +76,76 @@ func isValidTraceID(s string) bool {
 	return true
 }
 
+// accessLogSkip 是不打访问日志的路径。
+//
+// /metrics 是 Prometheus 每 15 秒抓一次，/healthz 是探针每秒一次——
+// 这两类请求占了日志量的大头，但排查问题时毫无价值。
+// 不过滤的话 ES 索引会被它们刷满，真正的业务请求被埋在里面。
+var accessLogSkip = map[string]bool{
+	"/metrics": true,
+	"/healthz": true,
+	"/livez":   true,
+	"/readyz":  true,
+}
+
+// AccessLog 记录每个 HTTP 请求。
+//
+// 必须在 Trace 之后挂：日志要带 trace_id，而 trace_id 是 Trace 中间件注入的。
+//
+// 只记「请求已经处理完」的最终状态（c.Next() 之后），
+// 因为在之前拿不到最终 status 和耗时。
+//
+// 路径用 c.FullPath()（路由模板 /documents/:id）而不是真实路径，
+// 否则每个 id 都是不同的值，ES 里按 path 聚合会得到一片散点。
+func AccessLog(logger *slog.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if accessLogSkip[c.Request.URL.Path] {
+			c.Next()
+			return
+		}
+		start := time.Now()
+		c.Next()
+
+		route := c.FullPath()
+		if route == "" {
+			// 没匹配上任何路由（404）：用真实路径，但要截断，
+			// 防止构造超长 URL 把日志撑爆
+			route = c.Request.URL.Path
+			if len(route) > 200 {
+				route = route[:200]
+			}
+		}
+
+		status := c.Writer.Status()
+		// service 由 logger 自己带（main 里 .With("service","gateway")），
+		// 这里再传一次会在同一条 JSON 里出现两个 service 键。
+		attrs := []any{
+			"method", c.Request.Method,
+			"path", route,
+			"status", status,
+			"bytes", c.Writer.Size(),
+			"latency_ms", float64(time.Since(start).Microseconds()) / 1000.0,
+			"client_ip", c.ClientIP(),
+			"trace_id", trace.FromContext(c.Request.Context()),
+		}
+		// 失败请求带上错误信息；成功请求不记，省一半体积
+		if errs := c.Errors.ByType(gin.ErrorTypePrivate).String(); errs != "" {
+			attrs = append(attrs, "error", errs)
+		}
+
+		// 5xx 用 Error 级别：告警规则按 level:error 筛选，
+		// 4xx 是客户端问题（多半是 token 过期），用 Warn 就够。
+		switch {
+		case status >= 500:
+			logger.Error("http_request", attrs...)
+		case status >= 400:
+			logger.Warn("http_request", attrs...)
+		default:
+			logger.Info("http_request", attrs...)
+		}
+	}
+}
+
 // Metrics 记录 RED 三件套。
 //
 // routeOf 返回用于指标标签的路由模板。
@@ -149,7 +219,12 @@ func Metrics() gin.HandlerFunc {
 }
 
 // Logger 全局 logger，由 main 注入。
-var Logger = observ.NewLogger("info")
+// Logger 是包级 logger。
+//
+// 必须带 service 字段：这个 logger 打在启动、中间件降级等场景，
+// 不带 service 的话这些日志进 ES 后会落进 logs-unknown 索引，
+// 排查时按服务筛选根本找不到它们。
+var Logger = observ.NewLogger("info").With("service", "gateway")
 
 // Recover 捕获 panic，返回 500 而不是让进程崩掉。
 // 网关是单点，它崩了全站就崩了，所以这一层必须兜住。

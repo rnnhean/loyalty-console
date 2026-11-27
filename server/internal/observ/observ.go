@@ -11,9 +11,12 @@
 package observ
 
 import (
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -394,10 +397,27 @@ func MetricsHandler() http.Handler {
 
 // ── 结构化日志 ─────────────────────────────────────────────
 
+// logFile 是文件输出的单例。
+//
+// 为什么用 sync.Once：NewLogger 会被调用多次（main 里一次、
+// gateway 包的包级变量又一次），每次 open 同一个文件会拿到不同的 fd，
+// 两个 handler 各写各的，日志就交叉错乱了。
+var (
+	logFileOnce sync.Once
+	logFile     *os.File
+)
+
 // NewLogger 返回 JSON 结构化 logger。
 //
 // 为什么用 slog 而不是 zap/logrus：Go 1.21+ 标准库自带，零依赖，
 // 换实现只要换 Handler。个人项目没必要为日志引第三方。
+//
+// 输出目标：
+//   - 始终写 stdout（容器里由 docker logs / Filebeat 的 container input 采集）
+//   - 若设置了 MC_LOG_FILE，同时写文件（本地裸进程跑时 Filebeat 只能读文件）
+//
+// 两处都写是有意的：容器化部署靠 stdout，本地开发靠文件，
+// 同一份代码两种环境都不用改。
 func NewLogger(level string) *slog.Logger {
 	var lv slog.Level
 	switch level {
@@ -410,10 +430,11 @@ func NewLogger(level string) *slog.Logger {
 	default:
 		lv = slog.LevelInfo
 	}
-	h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	w := logWriter()
+	h := slog.NewJSONHandler(w, &slog.HandlerOptions{
 		Level: lv,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			// 时间统一成 RFC3339，便于 Grafana 按时间范围查
+			// 时间统一成 RFC3339，便于 Grafana / ES 按时间范围查
 			if a.Key == slog.TimeKey {
 				return slog.String("ts", a.Value.Time().Format(time.RFC3339Nano))
 			}
@@ -421,4 +442,30 @@ func NewLogger(level string) *slog.Logger {
 		},
 	})
 	return slog.New(h)
+}
+
+// logWriter 决定日志往哪写。
+//
+// 只写 stdout：容器部署（docker logs 能拿到，Filebeat 的 container input 也能采）
+// 同时写文件：本地裸进程跑，没有容器日志可采，只能靠文件
+//
+// 文件打开失败不让进程退出——日志写不出来是运维问题，
+// 不该让整个网关起不来。退化成只写 stdout 并告警一行。
+func logWriter() io.Writer {
+	path := os.Getenv("MC_LOG_FILE")
+	if path == "" {
+		return os.Stdout
+	}
+	logFileOnce.Do(func() {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[observ] 打开日志文件失败，降级为仅 stdout: %v\n", err)
+			return
+		}
+		logFile = f
+	})
+	if logFile == nil {
+		return os.Stdout
+	}
+	return io.MultiWriter(os.Stdout, logFile)
 }

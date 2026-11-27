@@ -220,6 +220,21 @@ func NewConsumer(cfg ConsumerConfig, logger *slog.Logger) *Consumer {
 func (c *Consumer) Run(ctx context.Context, h Handler) error {
 	defer c.r.Close()
 
+	// 失败退避 + 日志限频。
+	//
+	// 原来的实现是「睡 1 秒 + 每次都打一条 Warn」。Kafka 整天不可用时，
+	// 这等于每天往日志里灌 86400 条一模一样的错误——实测把 ES 的
+	// logs-unknown 索引从几十条撑到 891 条只用了十几分钟，
+	// 真正的业务错误会完全被淹没。
+	//
+	// 两个改动：
+	//   1. 指数退避 1s → 2s → 4s … 封顶 30s，减少无意义的连接尝试；
+	//   2. 日志按 2 的幂限频（第 1、2、4、8… 次才记），
+	//      断 1 小时也只记十几条，且带 consecutive_failures，信息不丢。
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
+	suppressed := 0
+
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -230,10 +245,35 @@ func (c *Consumer) Run(ctx context.Context, h Handler) error {
 				return nil
 			}
 			c.errors.Add(1)
-			c.logger.Warn("kafka_fetch_error", "topic", c.cfg.Topic, "err", err.Error())
-			time.Sleep(time.Second)
+			suppressed++
+			// 2 的幂：1,2,4,8,16…
+			if suppressed&(suppressed-1) == 0 {
+				c.logger.Warn("kafka_fetch_error",
+					"topic", c.cfg.Topic,
+					"err", err.Error(),
+					"consecutive_failures", suppressed,
+					"backoff", backoff.String(),
+				)
+			}
+			time.Sleep(backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
 			continue
 		}
+
+		// 恢复：记一条，方便在日志里定位「几点开始好的」
+		if suppressed > 0 {
+			c.logger.Info("kafka_recovered",
+				"topic", c.cfg.Topic,
+				"after_failures", suppressed,
+			)
+			suppressed = 0
+		}
+		backoff = time.Second
 
 		var evt Event
 		if err := json.Unmarshal(msg.Value, &evt); err != nil {

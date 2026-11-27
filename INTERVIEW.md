@@ -440,3 +440,86 @@ Agent 的 `explain_rule` 工具就是拿这份轨迹组织成人话的——
 > 结论：「未命中，因 `member.login_days` 实际值 10 小于期望值 30」
 
 这句话里的两个数字都来自工具返回，不是模型编的——这正是「判定归代码、说话归模型」的落点。
+
+---
+
+### Q33：接口日志是怎么进 ES 的？为什么不直接用 Docker 日志驱动？
+
+**关键词**：**Filebeat + 文件采集**、**裸进程限制**
+
+```
+gateway (slog JSON)  ─┐
+kh (pino JSON)       ─┼─▶ *.log ─▶ Filebeat ─▶ ES(9201) ─▶ Kibana(5602)
+```
+
+**为什么走文件不走 Docker 日志**：本地开发时业务服务是**宿主机裸进程**
+（gateway 是 exe、kh 是 node），Docker 根本看不到它们。
+容器化之后才能改用 `container` input 自动带容器维度。
+
+**为什么单独一个 ES 集群**：knowledge-hub 已有的 ES(9200) 存的是文档向量
+（`kh_chunk`，`dense_vector` 字段）。日志是「高写入、按天滚动」的负载，
+混在一起会拖慢向量检索、ILM 互相干扰，且没法单独清空重建。
+
+---
+
+### Q34：两个服务用不同的日志库（slog / pino），字段怎么对齐？
+
+**关键词**：**字段约定先行**、**格式转换放采集侧**
+
+| 字段 | gateway (Go slog) | knowledge-hub (Node pino) |
+|---|---|---|
+| 时间 | `ts` RFC3339Nano | 自定义 `timestamp` 输出 ISO 8601 |
+| 级别 | `INFO` 字符串 | 数字 30/40/50，**Filebeat 转文字** |
+| 服务 | `service=gateway` | `customProps` 注入 |
+
+**为什么 level 转换放在 Filebeat**：pino 有个硬限制——
+同时用 `transport`（双写 stdout+文件）和 `formatters.level` 会直接抛
+`option.transport.targets do not allow custom level formatters`，
+**把服务启动搞挂**（实测踩到）。与其为了一个字段改日志库配置，
+不如在采集侧转——成本更低、风险更小。
+
+**判据**：字段不统一的话，就没法用一条查询同时筛两个服务的 error。
+
+---
+
+### Q35：日志采集最容易出的问题是什么？
+
+**关键词**：**日志风暴**、**采集器自采**
+
+**真实踩到的两类**：
+
+1. **日志风暴**：gateway 连不上 Kafka 时，原实现是「每秒重试 + 每次都打 Warn」。
+   十几分钟就往 ES 灌了 891 条一模一样的错误，真正的业务错误被完全淹没。
+   修法两条：
+   - **指数退避** 1s→2s→4s…封顶 30s（减少无意义重试）
+   - **按 2 的幂限频**（第 1/2/4/8… 次才记），并带 `consecutive_failures` 计数
+   断 1 小时也只记十几条，信息不丢。
+
+2. **采集器自采**：Filebeat 如果采 `/var/lib/docker/containers/*`，
+   会把 ES/Kibana/Filebeat 自己的日志也收进来，形成回环。
+   必须按容器标签过滤（`collect_logs=true`），或只采指定目录。
+
+**这两个问题在本地数据量小的时候完全看不出来**，上线后一周就能把索引撑爆。
+
+---
+
+### Q36：日志里怎么保证不泄漏 token？
+
+**关键词**：**白名单序列化**、**不记请求头**
+
+pino-http 默认 serializer 会把整个 `req`（含 headers、cookie）打出来，
+`authorization: Bearer xxx` 就混在里面。
+
+处理：**只保留排查必需的三个字段**：
+```ts
+serializers: {
+  req: (req) => ({ method: req.method, url: req.url, remoteAddress: req.remoteAddress }),
+  res: (res) => ({ statusCode: res.statusCode }),
+}
+```
+
+网关侧同理：AccessLog 只记 `method / path / status / latency / client_ip / trace_id`，
+**不记请求体和请求头**。
+
+**这条和 Sentry 的分工**：Sentry 存的是「出错才有的东西」（异常堆栈），
+ES 存的是「每次都有的东西」（访问日志）。把访问日志灌进 Sentry 会瞬间打爆额度。

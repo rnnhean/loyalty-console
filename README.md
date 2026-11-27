@@ -1429,3 +1429,67 @@ node scripts/test-ops-ui-crud.mjs  # 有头浏览器：三个页面的新建/编
 |---|---|---|
 | 模型会重复调用同一个工具 | 实测同一问题里 `explain_rule` 被调 3 次，单次问答成本从 0.045 元涨到 0.09 元 | 结论正确但浪费。现有判重只拦「参数完全相同」，模型微调 `data` 就能绕过。计划：同工具调用次数硬上限 + 提示词明确「结果已足够时直接给结论」 |
 | 网关缺 DB 重连 | Docker/WSL 重启后 `driver: bad connection`，网关启动直接失败 | 重启 Docker Desktop 可恢复。根治需要连接池健康检查（`SetConnMaxLifetime` 已有，但启动时 ping 失败仍需重试） |
+
+---
+
+## 二十、接口日志接入 ELK
+
+两个项目（loyalty-console / knowledge-hub）的接口日志统一采集到 Elasticsearch，Kibana 查询。
+
+### 架构
+
+```
+gateway (slog JSON)      ─┐
+knowledge-hub (pino JSON) ─┼─▶ 日志文件 ─▶ Filebeat ─▶ ES(9201) ─▶ Kibana(5602)
+nginx access log         ─┘
+```
+
+**为什么不复用 knowledge-hub 已有的 ES（9200）**：那个集群存的是文档向量
+（`kh_chunk` 索引，`dense_vector` 字段）。日志是「高写入、按天滚动」的负载，
+混在一个集群里会：拖慢向量检索、ILM 策略互相干扰、没法单独清空重建。
+拆开后日志集群可以随时 `DELETE _data_stream` 重来，不影响业务数据。
+
+**为什么用文件而不是 Docker 日志驱动**：本地开发时业务服务是宿主机裸进程
+（gateway 是 exe，kh 是 node），Docker 根本看不到它们；只能写文件再挂载给 Filebeat。
+
+### 启动
+
+```bash
+cd deploy
+docker compose -f docker-compose.logs.yml up -d   # ES + Kibana + Filebeat
+
+# 业务服务启动时指定日志文件
+MC_LOG_FILE=/abs/path/gateway.log ./server/bin/mc-gateway.exe
+LOG_FILE=/abs/path/knowledge-hub.log pnpm run start:dev   # kh
+```
+
+### 日志格式约定
+
+两个项目必须输出**同一套字段**，否则没法用一条查询同时筛：
+
+| 字段 | gateway (slog) | knowledge-hub (pino) |
+|---|---|---|
+| `ts` | RFC3339Nano 字符串 | ISO 8601（自定义 `timestamp`） |
+| `level` | `INFO` / `WARN` / `ERROR` | 数字 30/40/50 → Filebeat 转文字 |
+| `service` | `gateway` | `knowledge-hub` |
+| `msg` | `http_request` | `request completed` |
+| `trace_id` | 有 | 复用 `x-trace-id` 头 |
+
+### 踩过的坑
+
+| 问题 | 原因 | 修法 |
+|---|---|---|
+| **Kafka 重试日志风暴** | 每秒打一条 `kafka_fetch_error`，10 分钟灌进 891 条 | 指数退避 + 按 2 的幂限频（第 1/2/4/8… 次才记） |
+| **pino 报错 `option.transport.targets do not allow custom level formatters`** | 双写 transport + `formatters.level` 互斥，直接把服务启动搞挂 | 去掉 formatters，level 转换放 Filebeat 侧 |
+| **`service` 键重复两次** | logger 带了 + AccessLog 参数又传一次 | AccessLog 里去掉 |
+| **Filebeat 启动报 `unknown command "container"`** | 镜像自带 CMD 是 `-environment container`（给 setup 用） | 显式 `command: ["filebeat","-e","--strict.perms=false"]` |
+| **ES 索引变 `.ds-` 前缀** | Filebeat 8.x 默认创建 datastream | 正常现象；删数据要删 datastream 不是 backing index |
+| **镜像下载中断 `unexpected EOF`** | 官方 ES 镜像 487MB 下载失败 | 复用本地已有的同版本镜像（独立容器 = 独立集群） |
+
+### 验证
+
+```bash
+curl "http://127.0.0.1:9201/_cat/indices/logs-*?v"          # 两个服务的索引
+curl "http://127.0.0.1:9201/logs-*/_search?size=1"          # 看一条日志
+open http://127.0.0.1:5602                                  # Kibana Discover
+```

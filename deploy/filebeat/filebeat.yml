@@ -1,0 +1,118 @@
+# Filebeat：采集两个项目的接口日志到 ES。
+#
+# 采集目标：宿主机裸进程写的日志文件（gateway / knowledge-hub 都不在容器里）。
+# 容器日志（autodiscover）保留但默认不生效，等服务容器化后打开。
+
+filebeat.inputs:
+  - type: filestream
+    id: app-logs
+    enabled: true
+    paths:
+      - /logs/*.log
+      - /logs-kh/*.log
+    prospector.scanner.check_interval: 5s
+    parsers:
+      # 应用输出的是「一行一个 JSON」，用 ndjson 解析。
+      #
+      # 不用 multiline 合并：日志里没有多行堆栈（Go/Node 都是单行 JSON，
+      # 堆栈放在字段里），开了反而会把相邻的无关日志粘成一条。
+      #
+      # add_error_key：解析失败的行会带 error.message 字段但**不丢**，
+      # 因为「丢日志」比「日志不好查」严重得多。
+      - ndjson:
+          target: ""
+          overwrite_keys: true
+          add_error_key: true
+
+processors:
+  # ── level 数字转文字 ──
+  # knowledge-hub 用 pino，level 是数字（10/20/30/40/50/60）；
+  # gateway 用 slog，level 是字符串。两个项目进同一个索引，
+  # 格式不统一就没法用一条查询同时筛两边的错误。
+  #
+  # 为什么不改 pino 侧：pino 在「transport 双写 + formatters.level」组合下
+  # 会直接抛错（option.transport.targets do not allow custom level formatters），
+  # 把服务启动搞挂。采集侧转换成本更低、也更安全。
+  - if:
+      equals:
+        level: 10
+    then:
+      - add_fields: { target: "", fields: { level: "trace" } }
+  - if:
+      equals:
+        level: 20
+    then:
+      - add_fields: { target: "", fields: { level: "debug" } }
+  - if:
+      equals:
+        level: 30
+    then:
+      - add_fields: { target: "", fields: { level: "info" } }
+  - if:
+      equals:
+        level: 40
+    then:
+      - add_fields: { target: "", fields: { level: "warn" } }
+  - if:
+      equals:
+        level: 50
+    then:
+      - add_fields: { target: "", fields: { level: "error" } }
+  - if:
+      equals:
+        level: 60
+    then:
+      - add_fields: { target: "", fields: { level: "fatal" } }
+
+  # ── 时间戳归一 ──
+  # 应用自带 ts 时以它为准（文件 mtime 会比业务时间晚）；
+  # 解析不了就保留采集时间，不让整条日志因为时间格式异常被丢。
+  #
+  # 注意：Go 的 RFC3339Nano 会输出 2026-11-28T00:12:03.12345678+08:00
+  # 这种「小数位不固定」的形式，所以两个 layout 都要列。
+  - timestamp:
+      field: ts
+      layouts:
+        - "2006-01-02T15:04:05Z07:00"
+        - "2006-01-02T15:04:05.999999999Z07:00"
+        - "2006-01-02 15:04:05"
+        - UNIX_MS
+      ignore_failure: true
+
+  # ── 补 service 兜底 ──
+  # 应用日志本身带 service（gateway / knowledge-hub），正常不会走到这里。
+  # 但启动阶段的行（连接数据库、加载配置）可能没有这个字段，
+  # 用文件路径兜底，避免 ES 里出现一堆 service=unknown 的孤儿日志。
+  - if:
+      equals:
+        service: ""
+    then:
+      - add_fields:
+          target: ""
+          fields:
+            service: "unknown"
+
+  # ── 清掉无检索价值的高频字段 ──
+  - drop_fields:
+      fields: ["message", "log.offset", "agent.ephemeral_id", "ecs.version"]
+      ignore_missing: true
+
+output.elasticsearch:
+  hosts: ["http://es-logs:9200"]
+  # 索引按「服务 + 日期」切分，删过期数据时按索引删，不依赖 ILM 额外配置
+  index: "logs-%{[service]:unknown}-%{+yyyy.MM.dd}"
+
+# 显式模板：不让 ES 自动推断。
+# 自动推断会把 status 映射成 text、ts 映射成 text —— 那样就没法做
+# `status >= 500` 这种范围查询，也没法按时间聚合。
+setup.template:
+  name: "mc-logs"
+  pattern: "logs-*"
+  overwrite: true
+  json:
+    enabled: true
+    path: /usr/share/filebeat/template/logs-template.json
+    name: "mc-logs"
+
+logging.level: info
+logging.to_stderr: true
