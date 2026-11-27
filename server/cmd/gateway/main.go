@@ -31,7 +31,10 @@ import (
 	"github.com/example/loyalty-console/server/internal/domain"
 	"github.com/example/loyalty-console/server/internal/exporter"
 	"github.com/example/loyalty-console/server/internal/gateway"
+	"github.com/example/loyalty-console/server/internal/masking"
 	"github.com/example/loyalty-console/server/internal/observ"
+	"github.com/example/loyalty-console/server/internal/rule"
+	"github.com/example/loyalty-console/server/internal/scheduler"
 	"github.com/example/loyalty-console/server/internal/store"
 	"github.com/example/loyalty-console/server/pkg/trace"
 )
@@ -109,6 +112,42 @@ func run() error {
 	// 单独一层：任何一个中间件不可用都不阻塞启动（见 startInfra 的注释）。
 	inf := startInfra(ctx, logger, st)
 	defer inf.closeInfra()
+
+	// ── 运营中台新能力：规则引擎 / 定时作业 / 字段脱敏 ──
+	//
+	// 三块的初始化都放在这里，不阻塞启动：
+	// 规则和脱敏各自有降级路径（规则表为空就是没规则，脱敏服务挂了走本地识别），
+	// 调度器起不来只影响定时作业，页面照样能打开。
+	ruleSvc := rule.NewService(rule.NewStore(st.DB))
+
+	maskRemote := masking.NewRemoteClient(
+		env("MC_MASK_SERVICE_URL", "http://127.0.0.1:8021"),
+		time.Duration(envInt("MC_MASK_TIMEOUT_MS", 300))*time.Millisecond,
+	)
+	maskSvc := masking.NewService(st.DB, maskRemote)
+	// 探活一次用于健康视图；失败不影响启动
+	go func() {
+		if maskRemote.Healthy(ctx) {
+			inf.state.set("mask", true, "")
+		} else {
+			inf.state.set("mask", false, "识别服务不可达，脱敏降级为本地规则")
+		}
+	}()
+
+	jobStore := scheduler.NewStore(st.DB)
+	runner := scheduler.NewRunner(jobStore, lockerAdapter{inf.locker}, opsLogger(logger))
+	registerOpsCommands(runner, st.DB)
+	runner.Start(ctx)
+	defer runner.Stop()
+
+	ops := &opsDeps{
+		Rules:   ruleSvc,
+		Jobs:    jobStore,
+		Runner:  runner,
+		Masking: maskSvc,
+		// 只允许对这些字段做脱敏预览：预览接口本身不能变成「任意取值探测」
+		MaskField: []string{"member_phone", "member_id_card", "member_email"},
+	}
 
 	// ── 对象存储 + 导出服务 ──
 	var exportSvc *exporter.Service
@@ -293,6 +332,34 @@ func run() error {
 
 	// 中间件健康视图（不暴露密码与连接串，只报可达性）
 	api.GET("/infra/health", infraHealthHandler(inf.state))
+
+	// ── 规则引擎 ──
+	// 注意：gin 的 radix 树不允许同一层同时有静态段和参数段，
+	// 所以 id 路由和 dry-run 必须分开挂（/rules/:id 与 /rule-dry-run）。
+	api.GET("/rules", listOpsRules(ops))
+	api.POST("/rules", createRule(ops))
+	api.GET("/rules/:id", getRule(ops))
+	api.PUT("/rules/:id", updateRule(ops))
+	api.DELETE("/rules/:id", deleteRule(ops))
+	api.GET("/rules/:id/versions", ruleVersions(ops))
+	api.POST("/rules/:id/explain", explainRule(ops))
+	api.POST("/rule-dry-run", dryRunRules(ops))
+
+	// ── 定时作业 ──
+	api.GET("/jobs", listJobs(ops))
+	api.POST("/jobs", createJob(ops))
+	api.PUT("/jobs/:id", updateJob(ops))
+	api.DELETE("/jobs/:id", deleteJob(ops))
+	api.POST("/jobs/:id/run", runJobNow(ops))
+	api.GET("/job-runs", listJobRuns(ops))
+
+	// ── 字段脱敏 ──
+	api.GET("/mask-policies", listMaskPolicies(ops))
+	api.PUT("/mask-policies", upsertMaskPolicy(ops))
+	api.DELETE("/mask-policies/:field", deleteMaskPolicy(ops))
+	api.POST("/mask/preview", previewMask(ops))
+	api.GET("/mask/audit", listMaskAudit(ops))
+	api.POST("/mask/plaintext", requestPlaintext(ops))
 
 	// ── HTTP 服务 ──
 	addr := env("MC_ADDR", ":8080")

@@ -9,6 +9,9 @@ import AuditPage from '@/pages/AuditPage';
 import DataPage from '@/pages/DataPage';
 import Dashboard from '@/pages/Dashboard';
 import Login from '@/pages/Login';
+import RulesPage from '@/pages/RulesPage';
+import JobsPage from '@/pages/JobsPage';
+import MaskingPage from '@/pages/MaskingPage';
 import './styles/global.less';
 
 /** 未登录一律回登录页，并记住来源，登录后跳回来源页 */
@@ -58,6 +61,9 @@ export default function App() {
                     >
                         <Route index element={<Dashboard />} />
                         <Route path="audit" element={<AuditPage />} />
+                        <Route path="operation/rules" element={<RulesPage />} />
+                        <Route path="setting/jobs" element={<JobsPage />} />
+                        <Route path="setting/masking" element={<MaskingPage />} />
                         {DOMAINS.flatMap((d) =>
                             d.pages.map((p) => (
                                 // key 必须带 path：同一个 DataPage 组件在不同路由间复用时，

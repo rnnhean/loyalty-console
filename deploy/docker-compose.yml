@@ -166,6 +166,29 @@ services:
     restart: "no"
     logging: *default-logging
 
+  # 敏感数据识别服务。
+  #
+  # 独立成 Python 服务而不是塞进 Go 网关：识别规则迭代频繁，
+  # 改完重启即可，不用重新编译发布；网关侧对它做了超时降级
+  # （不可达时退回本地正则），所以它挂掉不会影响运营台可用性。
+  #
+  # 只暴露到宿主机，不参与对外路由——nginx 不转发 /mask-service 前缀。
+  mask-service:
+    build:
+      context: ../mask-service
+      dockerfile: Dockerfile
+    container_name: mc-mask-service
+    logging: *default-logging
+    restart: unless-stopped
+    ports:
+      - "8021:8021"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8021/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 volumes:
   mc-mysql-data:
   mc-redis-data:

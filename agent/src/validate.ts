@@ -11,7 +11,7 @@
 
 import type { Advice, Report } from '../../shared/contract.js';
 import { Ledger } from './ledger.js';
-import { ENTITIES } from './tools.js';
+import { ENTITIES, EXTRA_PAGES } from './tools.js';
 
 export type ValidationIssueKind =
     | 'unknown_finding'
@@ -34,8 +34,11 @@ export interface ValidationResult {
     fatal: boolean;
 }
 
-/** 建议里允许出现的页面路径：来自实体表，不允许模型自己拼。 */
-const PAGE_WHITELIST = new Set(Object.values(ENTITIES).map((e) => e.path.replace(/^\/api/, '')));
+/** 建议里允许出现的页面路径：来自实体表 + 运维配置页，不允许模型自己拼。 */
+const PAGE_WHITELIST = new Set<string>([
+    ...Object.values(ENTITIES).map((e) => e.path.replace(/^\/api/, '')),
+    ...EXTRA_PAGES,
+]);
 
 export function validateReport(raw: unknown, ledger: Ledger): ValidationResult {
     const issues: ValidationIssue[] = [];

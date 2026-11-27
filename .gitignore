@@ -36,3 +36,8 @@ playwright-report/
 blob-report/
 .playwright/
 .tmp-token
+
+# 编译产物与 Python 缓存
+server/bin/
+__pycache__/
+.pytest_cache/

@@ -1332,3 +1332,92 @@ pnpm exec playwright test e2e/infra.spec.ts   # 只测中间件
 - **`scripts/data/` 整个目录不进仓库**——里面是抓取过程中的原始数据，可能含个人信息。
 - `/metrics` 在生产只在内网网段可达，不对公网开放。
 - **nginx 日志必须写 stdout**，不要给 `/var/log/nginx` 挂具名卷（会破坏轮转、`docker logs` 也看不到）。
+
+---
+
+## 十九、运营配置：规则 / 作业 / 脱敏
+
+这三块是「配置系统本身」的能力，不属于任何一个业务域，入口在侧栏「运维配置」。
+
+### 1. 可配置规则（`/operation/rules`）
+
+和「运营体检」的区别：体检规则**写在代码里**，改判定要发版；这里的规则是运营**在页面上配**的。
+
+条件用闭集 DSL，不用 JS / CEL：
+
+```json
+{"all":[{"field":"member.login_days","op":"gte","value":30},
+        {"field":"tier.state","op":"eq","value":1}]}
+```
+
+算子只有 `eq / ne / gt / gte / lt / lte / in / nin / exists`，嵌套最多 8 层。
+**这不是保守，是安全边界**：规则通过 HTTP 提交，一旦允许「表达式里执行代码」，
+它就成了远程代码执行入口。
+
+三个必须有的能力：
+
+| 能力 | 为什么 |
+|---|---|
+| **试运行** | 改一条规则影响成千上万会员，先看样例数据下的命中情况 |
+| **解释** | 返回每一步的「实际值 vs 期望值」，而不是只回一个 false |
+| **版本快照** | 改坏了要能回滚，还要能查到「昨天和今天差在哪」 |
+
+### 2. 定时作业（`/setting/jobs`）
+
+DB 轮询 + Redis 分布式锁（复用 `internal/lock`），不引外部调度框架。
+
+- `cron` 是五段式，自己解析（`internal/scheduler/cron.go`），支持 `*`、`*/n`、`a-b`、逗号组合
+- 并发策略：`skip`（默认，上次没跑完就跳过）/ `queue` / `allow`
+- 执行失败**也推进 next_run_at**——否则失败的作业会在每个心跳里被反复触发，变成死循环
+- **立即执行**按钮：运维等不到 cron 点，必须能手动跑一次
+
+内置命令：`cleanup_expired_rules`（只删停用满 30 天的）、`snapshot_metrics`、`purge_mask_audit`。
+
+### 3. 字段脱敏（`/setting/masking`）
+
+三层优先级：**显式策略 > 远端识别服务 > 本地识别**。
+
+- 识别服务是独立的 Python 服务（`mask-service/`，FastAPI），改规则重启即可，不用重新编译网关
+- **远端挂了自动降级到本地正则**，展示路径上的外部依赖必须尽力而为
+- 导出也走同一条策略（导出是最容易漏的泄漏点）
+- 明文访问必须带理由并写审计表 `mc_mask_audit`
+
+### 本地跑起来
+
+```bash
+# 依赖（含 mask-service）
+cd deploy && docker compose up -d
+
+# 新表结构（已有数据卷时 initdb 不会自动跑）
+docker exec -i mc-mysql mysql -uroot -proot123 --default-character-set=utf8mb4 mc_core \
+  < deploy/mysql/init/05-ops-schema.sql
+
+# Python 单测
+docker exec mc-mask-service sh -c "cd /app && python -m pytest test_redact.py -q"
+
+# 后端 / 前端
+cd server && ./bin/mc-gateway.exe
+cd web && npx vite --port 5181
+
+# 端到端（需要 MC_ADMIN_PASS）
+node scripts/test-ops-e2e.mjs      # 36 项：规则/作业/脱敏 + 远端识别 + 降级
+node scripts/test-agent-rules.mjs  # 真实大模型：explain_rule / simulate_rules
+node scripts/test-ops-ui.mjs       # 有头浏览器：三个页面的交互
+```
+
+### 指标
+
+| 指标 | 说明 |
+|---|---|
+| `mc_rule_eval_total{result}` | 规则求值次数（hit / miss） |
+| `mc_rule_eval_duration_seconds{scope}` | 求值耗时（single / batch） |
+| `mc_job_run_total{job_name,result}` | 作业执行结果 |
+| `mc_job_duration_seconds{job_name}` | 作业耗时 |
+| `mc_job_skipped_total{job_name,reason}` | 被跳过的作业 |
+| `mc_mask_applied_total{source,kind}` | 脱敏生效（policy / remote / local） |
+| `mc_mask_plaintext_total{field}` | 明文访问次数（审计指标，正常应接近 0） |
+
+> 标签名是 `job_name` 而不是 `job`：`job` 是 Prometheus 抓取配置的保留标签，
+> 自定义指标里再用同名标签会被覆盖（实测面板上全变成 `gateway`）。
+
+看板：<http://127.0.0.1:13000/d/mc-ops-config>

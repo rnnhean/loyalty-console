@@ -141,6 +141,10 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 export const http = {
     get: <T>(path: string, query?: RequestOptions['query']) => request<T>(path, { query }),
     post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
+    // 运维页需要改配置：没有 PUT/DELETE 就只能全用 POST 绕，
+    // 那会让「改一条策略」和「删一条策略」在网关日志里长得一样，排查时很痛苦。
+    put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),
+    del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 };
 
 // ── 后端返回结构 ───────────────────────────────────────────

@@ -19,7 +19,10 @@ export type ToolName =
     | 'run_checks'
     | 'search_records'
     | 'list_products'
-    | 'pick_product';
+    | 'pick_product'
+    | 'list_rules'
+    | 'explain_rule'
+    | 'simulate_rules';
 
 export interface ToolSpecDef {
     name: ToolName;
@@ -101,7 +104,19 @@ const PATH_WHITELIST = new Set<string>([
     ...Object.values(ENTITIES).map((e) => e.path),
     '/api/diag/checks',
     '/api/diag/batch',
+    '/api/rules',
+    '/api/rule-dry-run',
 ]);
+
+/**
+ * 不在实体表里、但建议里可以跳转的页面。
+ *
+ * 实体表只收录「有对应 list 接口」的数据源；新加的三个运维页面
+ * （规则/作业/脱敏）是配置页，没有可检索的实体，所以单独列。
+ * validate.ts 的 PAGE_WHITELIST 和 prompt.ts 的可跳转清单都引用这一份，
+ * 避免两处各写一遍导致模型看到的路径和校验用的路径不一致。
+ */
+export const EXTRA_PAGES = ['/operation/rules', '/setting/jobs', '/setting/masking'] as const;
 
 export const TOOL_SPECS: ToolSpecDef[] = [
     {
@@ -176,6 +191,55 @@ export const TOOL_SPECS: ToolSpecDef[] = [
             properties: { query: { type: 'string' } },
         },
     },
+    {
+        name: 'list_rules',
+        description:
+            '列出运营在页面上配置的规则（不是诊断规则）。用于找到某条规则后解释它为什么命中/没命中。',
+        parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+                domain: { type: 'string', description: '业务域，留空表示全部' },
+            },
+        },
+    },
+    {
+        name: 'explain_rule',
+        description:
+            '解释一条可配置规则为什么命中或没命中。返回每一步的「实际值 vs 期望值」。' +
+            '需要 rule_id，可从 list_rules 获得。data 可选，不传用后端内置样例。',
+        parameters: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['rule_id'],
+            properties: {
+                rule_id: { type: 'number', description: '规则 ID' },
+                data: {
+                    type: 'object',
+                    additionalProperties: { type: ['string', 'number', 'boolean'] },
+                    description: '待求值的字段表，键用点路径如 "tier.state"',
+                },
+            },
+        },
+    },
+    {
+        name: 'simulate_rules',
+        description:
+            '用一份样例数据试跑全部启用的规则，返回哪些命中、哪些没命中。' +
+            '改规则之前先跑一遍，能提前发现误伤。',
+        parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+                domain: { type: 'string', description: '只试跑某个业务域' },
+                data: {
+                    type: 'object',
+                    additionalProperties: { type: ['string', 'number', 'boolean'] },
+                    description: '待求值的字段表，不传用内置样例',
+                },
+            },
+        },
+    },
 ];
 
 export interface ToolExecutor {
@@ -204,6 +268,9 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
         assertAllowed(url.pathname, [
             // run/:name 是动态段，白名单按前缀放行，但仍然逐条判
             ...(url.pathname.startsWith('/api/diag/run/') ? [url.pathname] : []),
+            // 规则解释接口同样带动态 id，用严格正则放行——
+            // 只允许「数字 id + /explain」这一种形状，防止拼出别的路径
+            ...(/^\/api\/rules\/\d+\/explain$/.test(url.pathname) ? [url.pathname] : []),
         ]);
 
         const res = await doFetch(url, {
@@ -320,6 +387,44 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
                     ok: true,
                     data: { candidates: fuzzyPick(query, names, 5) },
                 };
+            }
+
+            case 'list_rules': {
+                const a = asObject(args, ['domain']);
+                const query: Record<string, string> = {};
+                if (typeof a.domain === 'string' && a.domain) query.domain = a.domain;
+                const json = await request('/api/rules', { query }, req.timeoutMs);
+                return { ok: true, data: envelope(json) };
+            }
+
+            case 'explain_rule': {
+                const a = asObject(args, ['rule_id', 'data']);
+                const id = Number(a.rule_id);
+                if (!Number.isFinite(id) || id <= 0) {
+                    throw new BadArgs('rule_id 必须是正整数');
+                }
+                const json = await request(
+                    `/api/rules/${Math.trunc(id)}/explain`,
+                    { method: 'POST', body: { data: a.data ?? {} } },
+                    req.timeoutMs,
+                );
+                return { ok: true, data: envelope(json) };
+            }
+
+            case 'simulate_rules': {
+                const a = asObject(args, ['domain', 'data']);
+                const json = await request(
+                    '/api/rule-dry-run',
+                    {
+                        method: 'POST',
+                        body: {
+                            domain: typeof a.domain === 'string' ? a.domain : '',
+                            data: a.data ?? {},
+                        },
+                    },
+                    req.timeoutMs,
+                );
+                return { ok: true, data: envelope(json) };
             }
 
             default:

@@ -10,7 +10,7 @@
  * 一旦中间夹了每次都变的内容，后面所有固定内容都不再命中，每轮全量重算。
  */
 
-import { ENTITIES } from './tools.js';
+import { ENTITIES, EXTRA_PAGES } from './tools.js';
 
 export interface CheckInfo {
     name: string;
@@ -62,7 +62,10 @@ advice.ref.path 只能从下面「可用页面路径」里原样挑，不许自�
  * 比事后矫正便宜得多。和 validate.ts 的 PAGE_WHITELIST 同源，不会漂。
  */
 export function buildPageList(): string {
-    const paths = Object.values(ENTITIES).map((e) => e.path.replace(/^\/api/, ''));
+    const paths = [
+        ...Object.values(ENTITIES).map((e) => e.path.replace(/^\/api/, '')),
+        ...EXTRA_PAGES,
+    ];
     return paths.join(' ');
 }
 
@@ -95,6 +98,12 @@ export function buildSystemPrompt(checks: CheckInfo[], ctx: ContextHint = {}): s
         contextLine,
         '',
         '规则细节不够时，直接按名字调用 run_check，参数按上面标注填。',
+        '',
+        '另有一类「运营可配置规则」（不是上面的诊断规则）：',
+        '- list_rules 列出运营配的规则；',
+        '- explain_rule 解释某条规则为什么命中/没命中，返回每一步的实际值与期望值；',
+        '- simulate_rules 用样例数据试跑全部启用规则。',
+        '用户问「这条规则为什么没生效」「改了会不会误伤」时用这三个工具。',
     ].join('\n');
 }
 

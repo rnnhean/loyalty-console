@@ -51,6 +51,17 @@ export default function ConsoleLayout() {
                 icon: <MedicineBoxOutlined />,
                 label: <Link to="/audit">运营体检</Link>,
             },
+            {
+                // 运维配置单独一组：这三页是「配置系统本身」，不属于任何业务域。
+                key: 'ops',
+                icon: <SettingOutlined />,
+                label: '运维配置',
+                children: [
+                    { key: '/operation/rules', label: <Link to="/operation/rules">可配置规则</Link> },
+                    { key: '/setting/jobs', label: <Link to="/setting/jobs">定时作业</Link> },
+                    { key: '/setting/masking', label: <Link to="/setting/masking">字段脱敏</Link> },
+                ],
+            },
             ...DOMAINS.map((d) => ({
                 key: d.key,
                 icon: ICONS[d.icon] ?? <ApiOutlined />,
@@ -75,12 +86,20 @@ export default function ConsoleLayout() {
     // 体检页不在 DOMAINS 里（它跨域），面包屑单独补一级，
     // 否则从菜单点进来时会显示成「首页」而没有当前页。
     const isAudit = location.pathname === '/audit';
+    // 运维配置页不在 DOMAINS 里，面包屑同样单独补
+    const OPS_TITLES: Record<string, string> = {
+        '/operation/rules': '可配置规则',
+        '/setting/jobs': '定时作业',
+        '/setting/masking': '字段脱敏',
+    };
+    const opsTitle = OPS_TITLES[location.pathname];
 
     const crumbs = [
         { title: '首页' },
         ...(domain ? [{ title: domain.title }] : []),
         ...(page ? [{ title: page.title }] : []),
         ...(isAudit ? [{ title: '运营体检' }] : []),
+        ...(opsTitle ? [{ title: '运维配置' }, { title: opsTitle }] : []),
     ];
 
     const handleLogout = () => {
