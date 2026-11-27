@@ -166,8 +166,10 @@ test('连续两轮没有新证据就停，不再烧钱', async () => {
     );
 
     assert.equal(out.stopReason, 'no_new_evidence');
-    // 第 1 轮有 finding，第 2、3 轮重复 → stale 到 2 停止
-    assert.equal(calls.length, 3);
+    // 第 1 轮有 finding，第 2、3 轮重复 → stale 到 2 停止。
+    // 停止后 loop 会补一次收尾调用，把已查到的结果落成报告（共 4 次）。
+    // 关键是「只补一次」：不是无限重试。
+    assert.equal(calls.length, 4);
     assert.equal(out.report.finding_ids.length, 1);
 });
 

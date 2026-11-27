@@ -1,0 +1,387 @@
+{
+  "dashboard": {
+    "uid": "agent-diagnose",
+    "title": "Agent 诊断助手",
+    "tags": [
+      "agent",
+      "llm"
+    ],
+    "timezone": "browser",
+    "schemaVersion": 39,
+    "version": 0,
+    "refresh": "10s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "type": "row",
+        "title": "Agent 诊断助手 · 吞吐与成本",
+        "gridPos": {
+          "x": 0,
+          "y": 0,
+          "w": 24,
+          "h": 1
+        },
+        "panels": []
+      },
+      {
+        "type": "stat",
+        "title": "诊断请求（1h）",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "gridPos": {
+          "x": 0,
+          "y": 1,
+          "w": 4,
+          "h": 4
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "increase(agent_request_total[1h])"
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
+          "colorMode": "value",
+          "graphMode": "area"
+        }
+      },
+      {
+        "type": "stat",
+        "title": "在途请求",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "gridPos": {
+          "x": 4,
+          "y": 1,
+          "w": 4,
+          "h": 4
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "agent_inflight"
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
+          "colorMode": "value",
+          "graphMode": "area"
+        }
+      },
+      {
+        "type": "stat",
+        "title": "累计花费（元）",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "gridPos": {
+          "x": 8,
+          "y": 1,
+          "w": 4,
+          "h": 4
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyCNY"
+          },
+          "overrides": []
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "agent_daily_cost_cny"
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
+          "colorMode": "value",
+          "graphMode": "area"
+        }
+      },
+      {
+        "type": "stat",
+        "title": "Token 总量（1h）",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "gridPos": {
+          "x": 12,
+          "y": 1,
+          "w": 4,
+          "h": 4
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "increase(agent_tokens_total[1h])"
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
+          "colorMode": "value",
+          "graphMode": "area"
+        }
+      },
+      {
+        "type": "timeseries",
+        "title": "请求速率（按结果）",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "gridPos": {
+          "x": 0,
+          "y": 5,
+          "w": 12,
+          "h": 7
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "reqps",
+            "__legend": "{{result}}"
+          },
+          "overrides": []
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "sum by (result) (rate(agent_request_total[5m]))",
+            "legendFormat": "{{result}}"
+          }
+        ],
+        "options": {
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          }
+        }
+      },
+      {
+        "type": "timeseries",
+        "title": "报告类型分布",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "gridPos": {
+          "x": 12,
+          "y": 5,
+          "w": 12,
+          "h": 7
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "__legend": "{{kind}}"
+          },
+          "overrides": []
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "sum by (kind) (increase(agent_report_kind_total[1h]))",
+            "legendFormat": "{{kind}}"
+          }
+        ],
+        "options": {
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          }
+        }
+      },
+      {
+        "type": "row",
+        "title": "模型调用 · 延迟 · 工具",
+        "gridPos": {
+          "x": 0,
+          "y": 12,
+          "w": 24,
+          "h": 1
+        },
+        "panels": []
+      },
+      {
+        "type": "timeseries",
+        "title": "诊断耗时 P95",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "gridPos": {
+          "x": 0,
+          "y": 13,
+          "w": 12,
+          "h": 8
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s"
+          },
+          "overrides": []
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "histogram_quantile(0.95, sum by (le) (rate(agent_request_duration_seconds_bucket[5m])))",
+            "legendFormat": "{{result}}"
+          }
+        ],
+        "options": {
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          }
+        }
+      },
+      {
+        "type": "timeseries",
+        "title": "Token 用量（按方向）",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "gridPos": {
+          "x": 12,
+          "y": 13,
+          "w": 12,
+          "h": 8
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "__legend": "{{direction}}"
+          },
+          "overrides": []
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "sum by (direction) (rate(agent_tokens_total[5m]))",
+            "legendFormat": "{{direction}}"
+          }
+        ],
+        "options": {
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          }
+        }
+      },
+      {
+        "type": "timeseries",
+        "title": "工具调用速率（按工具/结果）",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "gridPos": {
+          "x": 0,
+          "y": 21,
+          "w": 12,
+          "h": 8
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "reqps",
+            "__legend": "{{tool}} ok={{ok}}"
+          },
+          "overrides": []
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "sum by (tool, ok) (rate(agent_tool_total[5m]))",
+            "legendFormat": "{{tool}} ok={{ok}}"
+          }
+        ],
+        "options": {
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          }
+        }
+      },
+      {
+        "type": "timeseries",
+        "title": "被校验剔除的引用（>0 = 模型在编）",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "gridPos": {
+          "x": 12,
+          "y": 21,
+          "w": 12,
+          "h": 8
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "__legend": "{{issue}}"
+          },
+          "overrides": []
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "expr": "sum by (issue) (rate(agent_citation_dropped_total[5m]))",
+            "legendFormat": "{{issue}}"
+          }
+        ],
+        "options": {
+          "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+          }
+        }
+      }
+    ]
+  },
+  "overwrite": true,
+  "folderUid": ""
+}

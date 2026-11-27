@@ -21,6 +21,7 @@ import type {
     StopReason,
 } from '../../shared/contract.js';
 import { costOf, type Price } from './config.js';
+import type { LangfuseTracer } from './langfuse.js';
 import { Ledger } from './ledger.js';
 import {
     buildSystemPrompt,
@@ -59,6 +60,8 @@ export interface LoopDeps {
     signal?: AbortSignal;
     /** 可注入，测试里避免真实计时 */
     now?: () => number;
+    /** 有值时才上报 Langfuse；测试与本地关掉埋点时不传 */
+    langfuse?: LangfuseTracer;
 }
 
 export interface RunOutcome {
@@ -96,6 +99,8 @@ export async function runAgent(
     let turns = 0;
     let stepIndex = 0;
     let staleStreak = 0;
+    let lastCallSig = '';
+    let toolsCalled = 0;
     let stopReason: StopReason | undefined;
     let reportCandidate: unknown;
     let issues: ValidationIssue[] = [];
@@ -115,17 +120,39 @@ export async function runAgent(
 
             const resp = await callModel({ messages, signal });
 
-            if (resp.toolCalls.length > 0) {
+            // 工具调用有两种到达方式，都要认：
+            //   1) 标准 function calling —— 供应商返回 choices[].message.tool_calls；
+            //   2) 文本 JSON —— OUTPUT_CONTRACT 明确要求模型「需要更多信息时只输出
+            //      {"tool_calls":[...]}」。小模型/网关经常只会第 2 种。
+            // 只认第 1 种时，模型老老实实按提示词输出文本工具调用，loop 却当成
+            // 「没有工具调用」，直接把空账本交给报告分支——实测就是这么丢掉整个查询的。
+            const calls =
+                resp.toolCalls.length > 0
+                    ? resp.toolCalls
+                    : extractTextToolCalls(parseJson(resp.text));
+
+            if (calls.length > 0) {
                 messages.push({
                     role: 'assistant',
                     content: resp.text,
-                    toolCalls: resp.toolCalls,
+                    toolCalls: calls,
                 });
-                const { added, toolMessages } = await act(resp.toolCalls, turns);
+                const { added, toolMessages } = await act(calls, turns);
                 messages.push(...toolMessages);
+                toolsCalled += calls.length;
 
-                // 连续两轮没有新增 finding，说明模型在重复查同样的东西
-                staleStreak = added === 0 ? staleStreak + 1 : 0;
+                // 判断「原地打转」用调用签名，而不是 finding 数。
+                //
+                // 查询类工具（列产品、搜记录、挑候选）压根不产生 finding，
+                // 按 finding 计数会把一次正常查询判成重复；而按工具类型豁免，
+                // 又会对「连调 5 次 list_products」这种真正的原地打转视而不见，
+                // 一路烧到轮数上限。按「这轮调的（工具+参数）跟上一轮一模一样」来判最准。
+                const sig = calls
+                    .map((c) => `${c.name}:${c.arguments}`)
+                    .sort()
+                    .join('|');
+                staleStreak = sig === lastCallSig && added === 0 ? staleStreak + 1 : 0;
+                lastCallSig = sig;
                 if (staleStreak >= 2) {
                     stopReason = 'no_new_evidence';
                     break;
@@ -135,6 +162,30 @@ export async function runAgent(
 
             // 没有工具调用：先把这段文本当报告试试
             const inline = extractReport(parseJson(resp.text));
+
+            // 账本为空时收到 diagnosis/query 结论，一律不采纳。
+            //
+            // 提示词里写着「工具没返回的，你不知道」，但实测模型面对模糊提问
+            // （「有没有配错的券」）会第一轮直接回一条 inconclusive 就收尾——
+            // 它等于在没有任何数据的情况下宣布「判不了」，用户花了钱什么也没查到。
+            // 这里把它顶回去，要求先取数。out_of_scope 例外：它本来就不依赖数据。
+            // 顶回去也计入轮次，模型若始终不调工具，最终会落到 max_turns。
+            const emptyLedger = ledger.recordsList.length === 0;
+            if (
+                inline !== undefined &&
+                emptyLedger &&
+                (inline as { kind?: unknown }).kind !== 'out_of_scope'
+            ) {
+                messages.push({ role: 'assistant', content: resp.text || '（空）' });
+                messages.push({
+                    role: 'user',
+                    content:
+                        '你还没有执行任何检查，当前没有任何工具返回的数据。先调用工具取数，再下结论。',
+                });
+                emit({ type: 'notice', level: 'info', text: '正在执行检查' });
+                continue;
+            }
+
             if (inline !== undefined) {
                 reportCandidate = inline;
                 stopReason = 'completed';
@@ -156,12 +207,52 @@ export async function runAgent(
             // 循环变量在这里已经自增到 maxTurns+1，对外报告的是「实际用了几轮」
             turns = deps.limits.maxTurns;
         }
+
+        // 循环是因轮数上限 / 原地打转停的，但模型已经查到了东西——
+        // 这时候不能直接判「服务故障」。补一次收尾调用，把已有结果落成报告。
+        // 典型场景：「一共有多少个产品」，模型反复调 list_products 直到被叫停，
+        // 数据其实早就拿到了，只是没人替它写成结论。
+        if (
+            reportCandidate === undefined &&
+            toolsCalled > 0 &&
+            stopReason !== 'degraded' &&
+            // 预算已经烧完，再调一次就是超支；调用方等的就是「到预算了」这个信号
+            stopReason !== 'budget' &&
+            !signal.aborted
+        ) {
+            try {
+                // 纯查询（账本为空）不能套 reportInstruction——那段是给「按证据下结论」用的，
+                // 会明确告诉模型「只能用这些 id」，而这里根本没有 id 可用。
+                messages.push({
+                    role: 'user',
+                    content:
+                        ledger.recordsList.length === 0
+                            ? '现在给出最终报告，只输出 JSON。你没有跑过诊断规则，' +
+                              '请直接根据前面工具返回的查询结果作答，kind 用 query，finding_ids 留空，' +
+                              'advice 可以为空。'
+                            : reportInstruction(ledger.snapshot()),
+                });
+                const closing = await callModel({ messages, signal, json: true });
+                const rep = extractReport(parseJson(closing.text));
+                // 只有真拿到报告才改判 completed；否则保留原停止原因
+                // （no_new_evidence / max_turns），别把「打转停下」粉饰成「正常结束」。
+                if (rep !== undefined) {
+                    reportCandidate = rep;
+                    stopReason = 'completed';
+                }
+            } catch {
+                // 收尾也失败就维持原判，走下面的降级路径
+            }
+        }
     } catch (err) {
         // 模型彻底不可用：不抛给调用方，先把已查到的东西交代清楚
         if (signal.aborted || isAbortError(err)) {
             stopReason = abortReason();
         } else {
             stopReason = 'degraded';
+            // 降级必须留下可排查的线索：ProviderError 的 message 只有状态码和
+            // 响应正文片段（不含请求头/key），截断后写日志是安全的。
+            console.error('[loop] model call failed:', String((err as Error)?.message ?? err).slice(0, 300));
             emit({
                 type: 'notice',
                 level: 'warn',
@@ -202,7 +293,15 @@ export async function runAgent(
     }
 
     // 既没有报告候选，也没有任何证据：这是服务故障，不是「结论是不完整」
-    if (reportCandidate === undefined && ledger.recordsList.length === 0) {
+    //
+    // 例外：调用过工具（比如纯查询走 list_products/search_records）时，
+    // 答案在工具结果里而不在账本里——这条路不能报「请稍后重试」，
+    // 那样用户明明问的是「一共有多少个产品」，拿到的却是一条服务故障。
+    if (
+        reportCandidate === undefined &&
+        ledger.recordsList.length === 0 &&
+        (toolsCalled === 0 || finalStop === 'degraded')
+    ) {
         emit({
             type: 'error',
             reason: finalStop === 'degraded' ? 'unavailable' : 'server',
@@ -236,11 +335,32 @@ export async function runAgent(
     }
 
     async function callModel(req: CompleteRequest): Promise<CompleteResponse> {
+        const startedAt = new Date();
         const resp = await deps.provider.complete({ tools: TOOL_SPECS, ...req });
+        const endedAt = new Date();
         cost += costOf(deps.limits.price, resp.usage);
         usage.inTokens += resp.usage.inTokens;
         usage.outTokens += resp.usage.outTokens;
         usage.cacheHitTokens += resp.usage.cacheHitTokens;
+
+        // 每一次模型调用都是一条 generation，Langfuse 面板上才看得到
+        // 轮次、token、耗时、是否走了工具——没有这个，trace 只是一个空壳。
+        deps.langfuse?.recordGeneration({
+            name: req.json ? 'llm.report' : 'llm.chat',
+            model: req.model ?? deps.provider.model,
+            startTime: startedAt,
+            endTime: endedAt,
+            inputTokens: resp.usage.inTokens,
+            outputTokens: resp.usage.outTokens,
+            inputSummary: summarizeMessages(req.messages),
+            outputSummary:
+                resp.text.slice(0, 2000) ||
+                (resp.toolCalls.length > 0
+                    ? `[tool_calls] ${resp.toolCalls.map((c) => c.name).join(', ')}`
+                    : ''),
+            toolCallCount: resp.toolCalls.length,
+        });
+
         return resp;
     }
 
@@ -467,6 +587,26 @@ function extractReport(parsed: unknown): unknown {
     return undefined;
 }
 
+/** 从模型文本里取 {"tool_calls":[...]}——OUTPUT_CONTRACT 约定的第一种形态。 */
+function extractTextToolCalls(parsed: unknown): ToolCall[] {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+    const arr = (parsed as { tool_calls?: unknown }).tool_calls;
+    if (!Array.isArray(arr)) return [];
+    const out: ToolCall[] = [];
+    for (const [i, raw] of arr.entries()) {
+        if (!raw || typeof raw !== 'object') continue;
+        const c = raw as { id?: unknown; name?: unknown; arguments?: unknown };
+        const name = typeof c.name === 'string' ? c.name.trim() : '';
+        if (!name) continue;
+        const args =
+            typeof c.arguments === 'string'
+                ? c.arguments
+                : JSON.stringify(c.arguments ?? {});
+        out.push({ id: typeof c.id === 'string' && c.id ? c.id : `txt${i + 1}`, name, arguments: args });
+    }
+    return out;
+}
+
 function paramsOf(call: ToolCall): Record<string, string> | undefined {
     const args = parseJson(call.arguments);
     if (!args || typeof args !== 'object') return undefined;
@@ -536,4 +676,15 @@ function syntheticInconclusive(check: string, reason: string): CheckResult {
         coverage: { checked: 0, skipped: 0, missing: [`调用失败：${reason}`] },
         error: reason,
     };
+}
+
+/**
+ * Langfuse 上展示用的输入摘要。
+ *
+ * 只放消息条数和最后一条用户输入——完整上下文动辄上万 token，
+ * 全塞进 Langfuse 既贵又没法读。要复现问题就按 trace_id 查本地日志。
+ */
+function summarizeMessages(messages: ChatMessage[]): string {
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+    return `[${messages.length} 条消息] ${(lastUser?.content ?? '').slice(0, 1500)}`;
 }

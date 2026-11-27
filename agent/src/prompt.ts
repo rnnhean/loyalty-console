@@ -10,6 +10,8 @@
  * 一旦中间夹了每次都变的内容，后面所有固定内容都不再命中，每轮全量重算。
  */
 
+import { ENTITIES } from './tools.js';
+
 export interface CheckInfo {
     name: string;
     title: string;
@@ -50,7 +52,19 @@ export const OUTPUT_CONTRACT = `每轮二选一：
    }
 
 finding_ids 只能填工具真实返回过的 id，格式是「规则名/finding 原 id」。
-advice.ref.path 只能是管理台已有页面路径。`;
+advice.ref.path 只能从下面「可用页面路径」里原样挑，不许自己拼。`;
+
+/**
+ * 合法页面路径清单，从实体表生成。
+ *
+ * 模型编不出真实路由——实测它给券建议时写了个 `/voucher/list`（真实路径是
+ * `/operation/vouchers`），校验层丢弃了这条建议。把清单直接摆进提示词，
+ * 比事后矫正便宜得多。和 validate.ts 的 PAGE_WHITELIST 同源，不会漂。
+ */
+export function buildPageList(): string {
+    const paths = Object.values(ENTITIES).map((e) => e.path.replace(/^\/api/, ''));
+    return paths.join(' ');
+}
 
 /** 段三：规则目录。只放「名字 + 一行用途 + 参数」，不放判定细节。 */
 export function buildSystemPrompt(checks: CheckInfo[], ctx: ContextHint = {}): string {
@@ -73,6 +87,9 @@ export function buildSystemPrompt(checks: CheckInfo[], ctx: ContextHint = {}): s
         '',
         OUTPUT_CONTRACT,
         '',
+        '可用页面路径（advice.ref.path 只能从这里挑）：',
+        buildPageList(),
+        '',
         '可用规则：',
         ...lines,
         contextLine,
@@ -88,5 +105,6 @@ export function reportInstruction(ledgerSnapshot: string): string {
 本轮真实产生的证据（只能用这些 id）：
 ${ledgerSnapshot}
 
-如果没有任何 finding，kind 用 query 或 out_of_scope，finding_ids 留空。`;
+如果没有任何 finding，kind 用 query 或 out_of_scope，finding_ids 留空。
+kind=diagnosis 必须至少有一个 finding_id——检查结果是 ok / inconclusive 时用 query。`;
 }

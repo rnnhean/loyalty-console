@@ -300,7 +300,15 @@ export function createToolExecutor(opts: ToolExecutorOptions): ToolExecutor {
 
             case 'list_products': {
                 const json = await request('/api/setting/products', {}, req.timeoutMs);
-                return { ok: true, data: trimRows(envelope(json), ['title'], maxRows, maxBytes) };
+                const rows = rowsOf(envelope(json));
+                const trimmed = trimRows(envelope(json), ['title'], maxRows, maxBytes);
+                // 模型要回答「一共多少个」，但它数不准一长串数组——
+                // 实测问「现在一共有多少个产品」时它连调 5 次这个工具，
+                // 因为每次都只给回一坨名单、没有现成的数字。把 count 直接给它。
+                const data = Array.isArray(trimmed)
+                    ? { count: rows.length, products: trimmed }
+                    : { count: rows.length, ...(trimmed as Record<string, unknown>) };
+                return { ok: true, data };
             }
 
             case 'pick_product': {

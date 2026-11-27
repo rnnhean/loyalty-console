@@ -20,6 +20,7 @@ import { createFakeProvider, createHttpProvider, type Provider } from './provide
 import { loadConfig, type AgentConfig } from './config.js';
 import { createToolExecutor } from './tools.js';
 import { Guard } from './guard.js';
+import { createLangfuseTracer, langfuseConfigFrom } from './langfuse.js';
 import { runAgent } from './loop.js';
 import type { CheckInfo } from './prompt.js';
 import { attachHeartbeat } from './sse.js';
@@ -224,6 +225,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         const checks = await getChecks(token);
         const provider = buildProvider();
 
+        // 埋点开关：没配 key 就完全跳过，不影响诊断
+        const lfCfg = langfuseConfigFrom(process.env);
+        const langfuse = lfCfg ? createLangfuseTracer(lfCfg, traceId) : undefined;
+
         const outcome = await runAgent(
             parsed.question,
             parsed.context,
@@ -241,6 +246,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
                 },
                 traceId,
                 signal: controller.signal,
+                ...(langfuse ? { langfuse } : {}),
                 onEvent: (e) => {
                     if (e.type === 'step' && e.status === 'failed') toolFailures++;
                     writeEvent(res, e);
@@ -272,6 +278,27 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
             latency_ms: Date.now() - startedAt,
             tool_failures: toolFailures,
             rejected_refs: outcome.issues.length,
+        });
+
+        // 面板上要能一眼看出「谁问了什么、查了哪些规则、结论是什么」。
+        // 失败不加 try——flush 内部已经吞掉所有异常，这里加一层只是噪音。
+        await langfuse?.flush({
+            name: 'agent.diagnose',
+            input: parsed.question,
+            output: outcome.report.title,
+            metadata: {
+                model: provider.model,
+                stop_reason: outcome.stopReason,
+                turns: outcome.turns,
+                checks: outcome.ledger.checks,
+                cost_cny: Number(outcome.costCny.toFixed(6)),
+                input_tokens: outcome.usage.inTokens,
+                output_tokens: outcome.usage.outTokens,
+                tool_failures: toolFailures,
+                rejected_refs: outcome.issues.length,
+            },
+            startTime: new Date(startedAt),
+            endTime: new Date(),
         });
     } catch (err) {
         errorReason = controller.signal.aborted ? 'aborted' : 'server';

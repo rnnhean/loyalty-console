@@ -19,6 +19,7 @@ export type ValidationIssueKind =
     | 'bad_advice_ref'
     | 'ambiguous_evidence'
     | 'number_not_in_evidence'
+    | 'empty_diagnosis'
     | 'bad_shape';
 
 export interface ValidationIssue {
@@ -80,13 +81,30 @@ export function validateReport(raw: unknown, ledger: Ledger): ValidationResult {
         }
     }
 
+    // 诊断型结论却一条证据都没有，要分两种情况：
+    //   a) 模型 claim 了 finding_ids 但全是编的 —— 属于造假，保持致命；
+    //   b) 模型压根没 claim，而账本里明明查过（记录非空）—— 它只是把
+    //      「查过、没问题」误写成了 diagnosis。这是类别写错，不是编造，
+    //      降级成 query 更符合事实；直接判死会让用户一次正常检查也拿不到结果。
+    const claimedNothing = claimed.length === 0;
+    const hasRecords = ledger.recordsList.length > 0;
+    const emptyDiagnosis = kind === 'diagnosis' && findingIds.length === 0;
+    const downgrade = emptyDiagnosis && claimedNothing && hasRecords;
+    if (downgrade) {
+        issues.push({
+            kind: 'empty_diagnosis',
+            detail: '诊断型结论没有任何证据，已按查询结果返回',
+        });
+    }
+
+    const finalKind = downgrade ? 'query' : kind;
     const fatal =
-        (kind === 'diagnosis' && findingIds.length === 0) ||
+        (finalKind === 'diagnosis' && findingIds.length === 0) ||
         issues.some((i) => i.kind === 'bad_shape');
 
     return {
         report: {
-            kind,
+            kind: finalKind,
             title: str(obj.title) || '未命名结论',
             phenomenon,
             judgement,

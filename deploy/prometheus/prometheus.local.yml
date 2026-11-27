@@ -40,3 +40,14 @@ scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
+
+  # knowledge-hub 后端（NestJS，跑在宿主机 3000）。
+  # 指标前缀是 kh_*，和本项目的 mc_* 区分开：两套系统共用一个 Prometheus，
+  # 靠前缀就能在同一个面板里分开看，不需要部署第二个 TSDB。
+  - job_name: knowledge-hub
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:3000"]
+        labels:
+          service: knowledge-hub
+          env: local

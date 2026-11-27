@@ -225,6 +225,10 @@ export function initMonitoring() {
                 'ResizeObserver loop limit exceeded',
                 'Non-Error promise rejection captured',
                 /^AbortError/,
+                // 联调/演练脚本故意抛的错误。Sentry 默认给每条新错误发邮件，
+                // 验证链路时会扰民（2026-11-27 真实发生：一条测试错误触发了告警邮件）。
+                // 用固定前缀识别，业务错误不会被误伤。
+                /e2e-sentry-verify/,
             ],
         });
     }
